@@ -6,7 +6,8 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 
 1. **C3D2/C3B BSP-Portal World Renderer (`PortalRenderer`)**:
    - Adapted from `CovertOps3D-RE`'s BSP-portal engine (`PortalRenderer`, `CustomLevelLoader`, `CustomMaterialSet`, `BSPNode`, `Sector`, `WallDefinition`, `RenderUtils`).
-   - Compiles original Chasm levels from `CSM.BIN` (`MAP.01` → level 1 "Power Station", `MAP.05` → level 2 "Around Pyramids", `MAP.06` → level 3 "Pyramid of Shmuher") into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level3.c3b`). `MAP.99` is the briefing background and is not playable, so it is not built with `0` BSP partition mismatches and 16-color 4-bit `BMP4` paletted wall, floor/ceiling flat, and skybox textures (`/res/textures/custom/materials.c3m`).
+  - Compiles the playable Chasm levels from `CSM.BIN` (`MAP.01` → level 1 "Power Station", `MAP.05` → level 2 "Around Pyramids", `MAP.06` → level 3 "Pyramid of Shmuher") into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level3.c3b`) with `0` BSP partition mismatches. `MAP.99` is the briefing background and is not built.
+   - Textures follow each map's own IDs: a wall tile ID is looked up in the map's `#GFX` table in `RESOURCE.XX` (e.g. `19` → `sewer01.cel`) and the matching PNG from `tex.zip` is used, or the original `.CEL` from `CSM.BIN` when no PNG exists. Floor and ceiling values index the 64 tiles of `FLOORS.XX`. Each level has its own `/res/textures/custom/L<n>/materials.c3m`; the BMP4 textures themselves are shared under `/res/textures/custom/shared/`. Textures are 16-colour 4-bit `BMP4`; tall 64×128 walls are squashed to 64×64.
 
 2. **Software 3D Polygon Renderer Without a Z-Buffer (`PolyRenderer3D`)**:
    - Zero Z-buffer allocation or per-pixel depth buffer reads/writes.

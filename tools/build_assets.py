@@ -20,6 +20,7 @@ import zlib
 import wave
 import struct
 import zipfile
+import hashlib
 from collections import deque, Counter
 
 ROOT_DIR = "/home/user/Chasm"
@@ -191,69 +192,37 @@ def save_rgb_as_bmp4(rgb_rows, out_path):
 # ---------------------------------------------------------------------------
 # 3. Build C3D2 Custom BMP4 Materials + /textures/custom/materials.c3m
 # ---------------------------------------------------------------------------
-def build_c3d2_materials():
+SHARED_TEX_DIR = os.path.join(TEX_CUSTOM_DIR, "shared")
+_shared_tex_refs = {}
+
+
+def shared_tex(rgb_rows):
+    """Write a 64x64 BMP4 once under textures/custom/shared/ (named by content hash) and
+    return its absolute resource path. Levels reference the same textures, which keeps the
+    JAR smaller."""
+    key = hashlib.sha1(repr(rgb_rows).encode("ascii")).hexdigest()[:16]
+    if key not in _shared_tex_refs:
+        os.makedirs(SHARED_TEX_DIR, exist_ok=True)
+        fname = f"t{key}.bmp"
+        save_rgb_as_bmp4(rgb_rows, os.path.join(SHARED_TEX_DIR, fname))
+        _shared_tex_refs[key] = f"/textures/custom/shared/{fname}"
+    return _shared_tex_refs[key]
+
+
+def load_tex_zip_index():
     zf = zipfile.ZipFile(TEX_ZIP, "r")
-    png_map = {}
+    index = {}
     for name in zf.namelist():
-        if name.lower().endswith(".png"):
-            png_map[os.path.basename(name).upper()] = name
+        base = os.path.basename(name).upper().strip()
+        if base.endswith(".PNG"):
+            base = base[:-4].strip()
+        index.setdefault(base, name)
+    return zf, index
 
-    wall_candidates = [
-        # Episode 1: Industrial / Military Base (1..10)
-        "WALL00.CEL.PNG", "WALL01.CEL.PNG", "WALL02.CEL.PNG", "WALL03.CEL.PNG",
-        "WALL04.CEL.PNG", "WALL05.CEL.PNG", "WALL07.CEL.PNG", "WALL09.CEL.PNG",
-        "WALL12.CEL.PNG", "WALL14.CEL.PNG",
-        # Episode 2: Ancient Egypt / Temple of Seth (11..18)
-        "WALL22.CEL.PNG", "WALL23.CEL.PNG", "WALL24.CEL.PNG", "WALL25.CEL.PNG",
-        "WALL26.CEL.PNG", "WALL28.CEL.PNG", "WALL30.CEL.PNG", "WALL33.CEL.PNG",
-        # Episode 3: Medieval / Time Chasm Sanctum + Doors & Switches (19..24)
-        "WALL40.CEL.PNG", "WALL42.CEL.PNG", "WALL45.CEL.PNG", "WALL48.CEL.PNG",
-        "WALL52.CEL.PNG", "WALL55.CEL.PNG",
-    ]
-    all_pngs = sorted(png_map.keys())
-    manifest_lines = ["# Chasm: The Rift C3D2 Material Set"]
 
-    for slot in range(1, 25):
-        cand = wall_candidates[slot - 1]
-        if cand not in png_map:
-            cand = all_pngs[(slot * 17) % len(all_pngs)]
-        w, h, rows = decode_png_rgb_grid(zf.read(png_map[cand]))
-        grid64 = resample_rgb_grid(w, h, rows, 64, 64)
-        fname = f"w{slot:02d}.bmp"
-        save_rgb_as_bmp4(grid64, os.path.join(TEX_CUSTOM_DIR, fname))
-        manifest_lines.append(f"wall.{slot}={fname}")
-
-    # Extract 12 authentic 64x64 Floor/Ceiling flat textures from FLOORS.01 & FLOORS.05
-    floors_01 = csm.read("FLOORS.01")
-    floors_05 = csm.read("FLOORS.05")
-    hdr_sz = 64
-    tile_sz = 86 * 64  # 64x64 + mipmaps
-    flat_sources = [
-        (floors_01, 0), (floors_01, 1), (floors_01, 2), (floors_01, 5),
-        (floors_01, 9), (floors_01, 10), (floors_01, 16), (floors_01, 18),
-        (floors_05, 0), (floors_05, 2), (floors_05, 5), (floors_05, 29),
-    ]
-    for slot, (fblob, tidx) in enumerate(flat_sources, start=1):
-        off = hdr_sz + tidx * tile_sz
-        if off + 4096 > len(fblob):
-            off = hdr_sz
-        raw_tile = fblob[off:off + 4096]
-        rows = []
-        for y in range(64):
-            r_row = []
-            for x in range(64):
-                r, g, b = PALETTE[raw_tile[y * 64 + x]]
-                if r < 8 and g < 8 and b < 8:
-                    r, g, b = 12, 12, 16
-                r_row.append((r, g, b))
-            rows.append(r_row)
-        fname = f"f{slot:02d}.bmp"
-        save_rgb_as_bmp4(rows, os.path.join(TEX_CUSTOM_DIR, fname))
-        manifest_lines.append(f"flat.{slot}={fname}")
-
-    # Skybox texture (64x128 BMP4)
+def build_sky_rows():
     sky_candidates = [k for k in csm.entries if k.startswith("SKY") and k.endswith(".CEL")]
-    sky_rows = []
+    rows = []
     if sky_candidates:
         sdata = csm.read(sky_candidates[0])
         sw, sh = struct.unpack("<HH", sdata[2:6])
@@ -268,18 +237,112 @@ def build_c3d2_materials():
                 if r < 8 and g < 8 and b < 8:
                     r, g, b = 18, 22, 36
                 r_row.append((r, g, b))
-            sky_rows.append(r_row)
+            rows.append(r_row)
     else:
         for ty in range(128):
-            sky_rows.append([(24, 34, 58 + (ty // 3))] * 64)
+            rows.append([(24, 34, 58 + (ty // 3))] * 64)
+    return rows
 
-    save_rgb_as_bmp4(sky_rows, os.path.join(TEX_CUSTOM_DIR, "sky.bmp"))
-    manifest_lines.append("sky=sky.bmp")
 
-    manifest_path = os.path.join(TEX_CUSTOM_DIR, "materials.c3m")
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(manifest_lines) + "\n")
-    print(f"[OK] Wrote C3D2 material set: 24 walls, 12 flats, 1 sky -> {manifest_path}")
+def wall_rgb64(cel_name, zf, index):
+    """64x64 RGB for a wall named by the level's #GFX table.
+
+    Uses the matching PNG from tex.zip when present; otherwise decodes the original
+    .CEL from CSM.BIN with the Chasm palette. Tall walls (64x128) are squashed to 64x64.
+    """
+    base = cel_name.rsplit(".", 1)[0].upper().strip()
+    if base in index:
+        w, h, rows = decode_png_rgb_grid(zf.read(index[base]))
+        return resample_rgb_grid(w, h, rows, 64, 64)
+    cdata = csm.read(cel_name.upper())
+    sw, sh = struct.unpack("<HH", cdata[2:6])
+    rows = []
+    for y in range(sh):
+        rows.append([PALETTE[cdata[800 + y * sw + x]] for x in range(sw)])
+    return resample_rgb_grid(sw, sh, rows, 64, 64)
+
+
+def flat_rgb64(fblob, tile_index):
+    """64x64 RGB for FLOORS.xx tile `tile_index` (64-byte header, 64 tiles of 5504 bytes)."""
+    off = 64 + tile_index * (86 * 64)
+    raw_tile = fblob[off:off + 4096]
+    rows = []
+    for y in range(64):
+        r_row = []
+        for x in range(64):
+            r, g, b = PALETTE[raw_tile[y * 64 + x]]
+            if r < 8 and g < 8 and b < 8:
+                r, g, b = 12, 12, 16
+            r_row.append((r, g, b))
+        rows.append(r_row)
+    return rows
+
+
+def build_level_materials(level_idx, map_num, mdata, rdata, floors, ceils):
+    """Write /textures/custom/L<n>/ (wall, flat and sky BMP4s + materials.c3m) for one map.
+
+    Returns (wall_slot_by_tid, default_wall, flat_slot_by_value, default_flat).
+    Wall slots follow the map's own texture IDs (index into the #GFX table of RESOURCE.XX),
+    floor/ceiling slots follow the FLOORS.XX tile index stored in the map.
+    """
+    out_dir = os.path.join(TEX_CUSTOM_DIR, f"L{level_idx}")
+    os.makedirs(out_dir, exist_ok=True)
+    gfx = {}
+    text = rdata
+    i0 = text.find("#GFX")
+    i1 = text.find("#end", i0)
+    for line in text[i0 + 4:i1].splitlines():
+        line = line.strip()
+        if ":" in line:
+            key, val = line.split(":", 1)
+            parts = val.strip().split()
+            if key.strip().isdigit() and parts:
+                gfx[int(key)] = parts[0]
+
+    zf, index = load_tex_zip_index()
+    manifest = ["# Chasm: The Rift materials for MAP.%02d (level %d)" % (map_num, level_idx)]
+    slot = 0
+    wall_slot = {}
+    wall_tids = sorted({mdata[0x18001 + k * 11] for k in range(4096)
+                        if 0 < mdata[0x18001 + k * 11] < 128})
+    for tid in wall_tids:
+        name = gfx.get(tid, "")
+        if not name:
+            print(f"[WARN] MAP.{map_num:02d} wall id {tid} has no #GFX name; uses default wall")
+            continue
+        try:
+            rgb = wall_rgb64(name, zf, index)
+        except KeyError:
+            print(f"[WARN] MAP.{map_num:02d} wall {name} not in tex.zip or CSM.BIN; uses default wall")
+            continue
+        slot += 1
+        manifest.append(f"wall.{slot}={shared_tex(rgb)}")
+        wall_slot[tid] = slot
+    zf.close()
+    default_wall = min(wall_slot.values()) if wall_slot else 0
+    if default_wall == 0:
+        slot += 1
+        manifest.append(f"wall.{slot}={shared_tex([[(96, 96, 104)] * 64 for _ in range(64)])}")
+        default_wall = slot
+
+    fblob = csm.read(f"FLOORS.{map_num:02d}")
+    flat_slot = {}
+    flat_vals = sorted({v for v in list(floors) + list(ceils) if v < 62})
+    flat_count = 0
+    for v in flat_vals:
+        flat_count += 1
+        manifest.append(f"flat.{flat_count}={shared_tex(flat_rgb64(fblob, v))}")
+        flat_slot[v] = flat_count
+    default_flat = flat_slot[flat_vals[0]] if flat_vals else 1
+    if not flat_vals:
+        manifest.append(f"flat.1={shared_tex([[(96, 96, 104)] * 64 for _ in range(64)])}")
+
+    manifest.append(f"sky={shared_tex(build_sky_rows())}")
+    with open(os.path.join(out_dir, "materials.c3m"), "w", encoding="utf-8") as f:
+        f.write("\n".join(manifest) + "\n")
+    print(f"[OK] L{level_idx} (MAP.{map_num:02d}): {len(wall_slot)} wall textures, "
+          f"{flat_count} flat textures -> {out_dir}")
+    return wall_slot, default_wall, flat_slot, default_flat
 
 
 # ---------------------------------------------------------------------------
@@ -698,12 +761,14 @@ CHASM_TO_LOCAL_ITEM = {
 }
 
 
-def compile_chasm_map_to_c3b(level_idx, map_num, max_cells, wall_base_slot, flat_base_slot):
+def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     mdata = csm.read(f"MAP.{map_num:02d}")
     rdata = csm.read(f"RESOURCE.{map_num:02d}").decode("ascii", errors="ignore")
     ceils = mdata[0x23001:0x24001]
     floors = mdata[0x24001:0x25001]
     lights = mdata[0x25001:0x26001]
+    wall_slot, default_wall, flat_slot, default_flat = build_level_materials(
+        level_idx, map_num, mdata, rdata, floors, ceils)
 
     # Parse static 3O model filenames from RESOURCE.XX
     model_files = {}
@@ -773,7 +838,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells, wall_base_slot, flat
             wx1, wy1 = c10 / 256.0, c11 / 256.0
             if tid < 128:
                 mx, my = int((wx0 + wx1) * 0.5), int((wy0 + wy1) * 0.5)
-                slot = wall_base_slot + (tid % 8)
+                slot = wall_slot.get(tid, default_wall)
                 for dx in range(-1, 2):
                     for dy in range(-1, 2):
                         cell_wall_tex[(mx + dx, my + dy)] = slot
@@ -863,8 +928,8 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells, wall_base_slot, flat
 
     sectors = []
     for sec_id, (x0, y0, x1, y1, sky, fstep) in enumerate(rects):
-        ft = flat_base_slot + (floors[x0 * 64 + y0] % 4)
-        ct = 51 if sky else (flat_base_slot + (ceils[x0 * 64 + y0] % 4))
+        ft = flat_slot.get(floors[x0 * 64 + y0], default_flat)
+        ct = 51 if sky else flat_slot.get(ceils[x0 * 64 + y0], default_flat)
         amb = lights[x0 * 64 + y0]
         light = max(9, min(15, 15 - (amb // 4)))
         fl_h = fstep
@@ -881,7 +946,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells, wall_base_slot, flat
         return idx
 
     def pick_wall_tex(gx, gy):
-        return cell_wall_tex.get((gx, gy), wall_base_slot + ((gx + gy) % 8))
+        return cell_wall_tex.get((gx, gy), default_wall)
 
     for sec_id, (x0, y0, x1, y1, sky, fstep) in enumerate(rects):
         # 1. West edge: x = x0, y goes y0 -> y1
@@ -968,7 +1033,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells, wall_base_slot, flat
 
     report = c3d2_core.LEGACY.rebuild_derived(lvl, validate=True)
     out_c3b = os.path.join(LEVELS_DIR, f"level{level_idx}.c3b")
-    c3d2_core.dump_c3b(lvl, "/textures/custom/materials.c3m", out_c3b, None)
+    c3d2_core.dump_c3b(lvl, f"/textures/custom/L{level_idx}/materials.c3m", out_c3b, None)
 
     # Filter monsters, items, and props to visited sectors (or place inside sector centers)
     sector_centers = []
@@ -1050,9 +1115,9 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells, wall_base_slot, flat
 
 
 def build_all_levels():
-    compile_chasm_map_to_c3b(1, 1, max_cells=220, wall_base_slot=1,  flat_base_slot=1)
-    compile_chasm_map_to_c3b(2, 5, max_cells=220, wall_base_slot=9,  flat_base_slot=5)
-    compile_chasm_map_to_c3b(3, 6, max_cells=220, wall_base_slot=11, flat_base_slot=5)
+    compile_chasm_map_to_c3b(1, 1, max_cells=220)
+    compile_chasm_map_to_c3b(2, 5, max_cells=220)
+    compile_chasm_map_to_c3b(3, 6, max_cells=220)
     # MAP.99 is the briefing background (not playable), so only three playable maps are built.
 
 
@@ -1332,7 +1397,6 @@ def build_ui_pack():
 
 
 if __name__ == "__main__":
-    build_c3d2_materials()
     build_models_pack()
     build_ui_pack()
     build_all_levels()
