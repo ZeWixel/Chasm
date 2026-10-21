@@ -230,6 +230,20 @@ public final class GameWorld {
     public final int[] propHalfX       = new int[MAX_PROPS];
     public final int[] propHalfZ       = new int[MAX_PROPS];
 
+    // ==================== Explosive barrels (prop model 30, BAREL1.3O) ====================
+    /** Prop model id of the explosive barrel. */
+    public static final int BARREL_MODEL = 30;
+    /** Barrel hit points: two Rift Rifle hits, three Volcano Chaingun hits, or one Double Shotgun blast. */
+    public static final int BARREL_HP = 40;
+    /** Blast damage at the barrel centre; it falls off linearly to 0 at BARREL_BLAST_RADIUS. */
+    public static final int BARREL_BLAST_DAMAGE = 90;
+    /** Blast radius in world units (two 96-unit cells). */
+    public static final int BARREL_BLAST_RADIUS = 192;
+    /** Remaining hit points per prop (used by barrels only). */
+    private final int[] propHP = new int[MAX_PROPS];
+    /** Barrels queued for detonation during one chain reaction. */
+    private final int[] blastQueue = new int[MAX_PROPS];
+
     // ==================== 3D Projectiles & Gibs ====================
     public static final int MAX_PROJ = 24;
     /** Projectile model ids (models.bin): 33 = gib particle, 34 = saw-disk, 35 = energy bolt. */
@@ -775,6 +789,7 @@ public final class GameWorld {
             int i = propCount;
             if (i >= MAX_PROPS) break;
             propCount++;
+            propHP[i] = BARREL_HP;
             propActive[i] = true;
             propModelId[i] = movModel[k];
             propHalfX[i] = movHX[k] << 16;
@@ -931,6 +946,7 @@ public final class GameWorld {
 
                 if (modelId < 30 || modelId > 32) modelId = 30 + (i % 3);
                 propActive[i] = true;
+                propHP[i] = BARREL_HP;
                 propHalfX[i] = halfX << 16;
                 propHalfZ[i] = halfZ << 16;
                 propModelId[i] = modelId;
@@ -1266,9 +1282,116 @@ public final class GameWorld {
             }
         }
 
-        if (bestMon >= 0) {
+        // Barrels are targets too. A barrel only counts if it is nearer than the best monster.
+        int bestProp = -1;
+        for (int p = 0; p < propCount; p++) {
+            if (!isBarrel(p)) continue;
+            int rx = propX[p] - playerBody.x;
+            int rz = propZ[p] - playerBody.z;
+            int viewX = (int) (((long) cos * rx - (long) sin * rz) >> 16);
+            int viewDepth = (int) (((long) sin * rx + (long) cos * rz) >> 16);
+            if (viewDepth <= (8 << 16) || viewDepth > (900 << 16) || viewDepth >= bestDepth) continue;
+            int half = Math.max(propHalfX[p], propHalfZ[p]) + (12 << 16) + (viewDepth >> 3);
+            if (Math.abs(viewX) <= half && hasLineOfSight(playerBody.x, playerBody.z, propX[p], propZ[p])) {
+                bestDepth = viewDepth;
+                bestProp = p;
+                bestMon = -1;
+            }
+        }
+
+        if (bestProp >= 0) {
+            damageBarrel(bestProp, damage);
+        } else if (bestMon >= 0) {
             damageMonster(bestMon, damage);
         }
+    }
+
+    /** True if prop p is a live explosive barrel. */
+    public boolean isBarrel(int p) {
+        return p >= 0 && p < propCount && propActive[p] && propModelId[p] == BARREL_MODEL;
+    }
+
+    /** Applies damage to barrel p. A barrel at 0 HP explodes and may set off barrels nearby. */
+    public void damageBarrel(int p, int dmg) {
+        if (!isBarrel(p)) return;
+        propHP[p] -= dmg;
+        if (propHP[p] <= 0) detonateBarrel(p);
+    }
+
+    /**
+     * Explodes barrel `first`. Each blast deals round(base * (1 - d / radius)) to monsters and the
+     * player within the radius, and to other barrels (which chain if they reach 0 HP). Chained
+     * barrels are processed from a queue, so the chain is iterative and each barrel explodes once.
+     */
+    private void detonateBarrel(int first) {
+        int head = 0;
+        int tail = 0;
+        propActive[first] = false;    // no longer collidable, rendered, or targetable
+        blastQueue[tail++] = first;
+        while (head < tail) {
+            int b = blastQueue[head++];
+            int cx = propX[b];
+            int cz = propZ[b];
+            SoundManager.playSfx(SoundManager.SFX_ROCKET);
+            for (int k = 0; k < 4; k++) {
+                spawnProjectile(false, PROJ_GIB, cx, 8 << 16, cz, nextRand() & 0xFFFF, 0);
+            }
+
+            for (int p = 0; p < propCount; p++) {
+                if (!isBarrel(p)) continue;
+                int d = blastDistance(cx, cz, propX[p], propZ[p]);
+                if (d >= BARREL_BLAST_RADIUS) continue;
+                propHP[p] -= blastDamage(d);
+                if (propHP[p] <= 0) {
+                    propActive[p] = false;
+                    blastQueue[tail++] = p;
+                }
+            }
+
+            for (int m = 0; m < monCount; m++) {
+                if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
+                int d = blastDistance(cx, cz, monX[m], monZ[m]);
+                if (d < BARREL_BLAST_RADIUS) {
+                    int dmg = blastDamage(d);
+                    if (dmg > 0) damageMonster(m, dmg);
+                }
+            }
+
+            int pd = blastDistance(cx, cz, playerBody.x, playerBody.z);
+            if (pd < BARREL_BLAST_RADIUS) {
+                int dmg = blastDamage(pd);
+                if (dmg > 0) damagePlayer(dmg);
+            }
+        }
+    }
+
+    /** Blast damage at distance d (world units), rounded, linear falloff to 0 at the radius. */
+    private static int blastDamage(int d) {
+        return (BARREL_BLAST_DAMAGE * (BARREL_BLAST_RADIUS - d) + (BARREL_BLAST_RADIUS >> 1)) / BARREL_BLAST_RADIUS;
+    }
+
+    /** Horizontal distance in whole world units between two 16.16 points. */
+    private static int blastDistance(int ax, int az, int bx, int bz) {
+        int dx = (ax - bx) >> 16;
+        int dz = (az - bz) >> 16;
+        return isqrt(dx * dx + dz * dz);
+    }
+
+    /** Integer square root (floor) of a non-negative int. */
+    private static int isqrt(int v) {
+        int res = 0;
+        int bit = 1 << 30;
+        while (bit > v) bit >>= 2;
+        while (bit != 0) {
+            if (v >= res + bit) {
+                v -= res + bit;
+                res = (res >> 1) + bit;
+            } else {
+                res >>= 1;
+            }
+            bit >>= 2;
+        }
+        return res;
     }
 
     /**
@@ -1565,12 +1688,25 @@ public final class GameWorld {
             projSector[i] = getSectorAtPoint(nx, nz);
 
             if (projFromPlayer[i]) {
+                boolean hit = false;
                 for (int m = 0; m < monCount; m++) {
                     if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
                     if (Math.abs(nx - monX[m]) < hitRadius && Math.abs(nz - monZ[m]) < hitRadius) {
                         damageMonster(m, projDamage[i]);
                         projActive[i] = false;
+                        hit = true;
                         break;
+                    }
+                }
+                if (!hit) {
+                    for (int p = 0; p < propCount; p++) {
+                        if (!isBarrel(p)) continue;
+                        if (Math.abs(nx - propX[p]) < hitRadius + propHalfX[p]
+                                && Math.abs(nz - propZ[p]) < hitRadius + propHalfZ[p]) {
+                            projActive[i] = false;
+                            damageBarrel(p, projDamage[i]);
+                            break;
+                        }
                     }
                 }
             }
