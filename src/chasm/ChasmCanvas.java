@@ -232,6 +232,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         }
     }
 
+    private int[] scaleXMap;
+    private int[] scaleYRow;
+
     private void blitViewport(Graphics g) {
         if (viewW == PortalRenderer.VIEWPORT_WIDTH && viewH == PortalRenderer.VIEWPORT_HEIGHT) {
             g.drawRGB(
@@ -247,16 +250,30 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             if (scaledBuf == null || scaledBuf.length != viewW * viewH) {
                 scaledBuf = new int[viewW * viewH];
             }
-            int[] src = PortalRenderer.screenBuffer;
             int srcW = PortalRenderer.VIEWPORT_WIDTH;
             int srcH = PortalRenderer.VIEWPORT_HEIGHT;
+            // Source index maps are built once per view size, so the per-pixel
+            // loop is a table lookup + store with no division.
+            if (scaleXMap == null || scaleXMap.length != viewW
+                    || scaleYRow == null || scaleYRow.length != viewH) {
+                scaleXMap = new int[viewW];
+                scaleYRow = new int[viewH];
+                for (int x = 0; x < viewW; x++) {
+                    scaleXMap[x] = (x * srcW) / viewW;
+                }
+                for (int y = 0; y < viewH; y++) {
+                    scaleYRow[y] = ((y * srcH) / viewH) * srcW;
+                }
+            }
+            int[] src = PortalRenderer.screenBuffer;
+            int[] dst = scaledBuf;
+            int[] xMap = scaleXMap;
+            int[] yRow = scaleYRow;
             for (int y = 0; y < viewH; y++) {
-                int sy = (y * srcH) / viewH;
-                int srcRow = sy * srcW;
+                int srcRow = yRow[y];
                 int dstRow = y * viewW;
                 for (int x = 0; x < viewW; x++) {
-                    int sx = (x * srcW) / viewW;
-                    scaledBuf[dstRow + x] = src[srcRow + sx];
+                    dst[dstRow + x] = src[srcRow + xMap[x]];
                 }
             }
             g.drawRGB(scaledBuf, 0, viewW, 0, 0, viewW, viewH, false);

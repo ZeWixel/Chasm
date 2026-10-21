@@ -698,6 +698,105 @@ public final class PolyRenderer3D {
      * Affine texture-mapped triangle fill (no Z-buffer, painter's order handled by the caller).
      * Texel index 0 / 255 are treated as holes and show the flat fallback colour.
      */
+    // Shade+tint lookup for textured triangles: 256 ARGB entries, one per
+    // palette index. Rebuilt only when palette/shade/tint/fallback change, so the
+    // per-pixel loop is a single table load instead of three multiplies and clamps.
+    private static final int[] SHADE_LUT = new int[256];
+    private static int[] shadeLutPal;
+    private static int shadeLutShade = -1;
+    private static int shadeLutTint;
+    private static int shadeLutFallback;
+
+    private static int[] buildShadeLut(int[] palRGB, int shade256, int tintRGB, int fallbackRGB) {
+        // Index 0 and 255 are transparent/fallback texels: cheap to rewrite every call.
+        int fallback = 0xFF000000 | fallbackRGB;
+        SHADE_LUT[0] = fallback;
+        SHADE_LUT[255] = fallback;
+        if (palRGB == shadeLutPal && shade256 == shadeLutShade && tintRGB == shadeLutTint) {
+            return SHADE_LUT;
+        }
+        shadeLutPal = palRGB;
+        shadeLutShade = shade256;
+        shadeLutTint = tintRGB;
+        int tintR = (tintRGB >> 16) & 0xFF, tintG = (tintRGB >> 8) & 0xFF, tintB = tintRGB & 0xFF;
+        int n = palRGB.length;
+        for (int i = 1; i < 255; i++) {
+            if (i >= n) {
+                SHADE_LUT[i] = fallback;
+                continue;
+            }
+            int p = palRGB[i];
+            int r = (((p >> 16) & 0xFF) * shade256 >> 8) + tintR;
+            int g = (((p >> 8) & 0xFF) * shade256 >> 8) + tintG;
+            int b = ((p & 0xFF) * shade256 >> 8) + tintB;
+            if (r > 255) r = 255;
+            if (g > 255) g = 255;
+            if (b > 255) b = 255;
+            SHADE_LUT[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+        }
+        return SHADE_LUT;
+    }
+
+    /** Triangles shorter than this many rows shade per pixel: rebuilding the LUT costs more. */
+    private static final int TEX_LUT_MIN_ROWS = 24;
+
+    /**
+     * One horizontal textured run. Two loop bodies so the portal-clip test is
+     * not evaluated for every pixel when clipping is off.
+     */
+    private static void drawTexSpan(int[] buf, int rowOffset, int xs, int xe, int y,
+                                    int uCur, int uStep, int vCur, int vStep,
+                                    byte[] tex, int maxV, int[] lut,
+                                    boolean usePortalClips, short[] floorClip, short[] ceilClip) {
+        if (!usePortalClips) {
+            for (int x = xs; x <= xe; x++) {
+                int vi = vCur >> 16;
+                if (vi < 0) vi = 0; else if (vi > maxV) vi = maxV;
+                buf[rowOffset + x] = lut[tex[(vi << 6) + ((uCur >> 16) & 63)] & 0xFF];
+                uCur += uStep;
+                vCur += vStep;
+            }
+        } else {
+            for (int x = xs; x <= xe; x++) {
+                if (y >= floorClip[x] && y <= ceilClip[x]) {
+                    int vi = vCur >> 16;
+                    if (vi < 0) vi = 0; else if (vi > maxV) vi = maxV;
+                    buf[rowOffset + x] = lut[tex[(vi << 6) + ((uCur >> 16) & 63)] & 0xFF];
+                }
+                uCur += uStep;
+                vCur += vStep;
+            }
+        }
+    }
+
+    /** Same output as drawTexSpan but shades each texel directly (no LUT build). */
+    private static void drawTexSpanShaded(int[] buf, int rowOffset, int xs, int xe, int y,
+                                          int uCur, int uStep, int vCur, int vStep,
+                                          byte[] tex, int maxV, int[] palRGB, int shade256,
+                                          int tintRGB, int fallbackRGB,
+                                          boolean usePortalClips, short[] floorClip, short[] ceilClip) {
+        int tintR = (tintRGB >> 16) & 0xFF, tintG = (tintRGB >> 8) & 0xFF, tintB = tintRGB & 0xFF;
+        int fallback = 0xFF000000 | fallbackRGB;
+        for (int x = xs; x <= xe; x++, uCur += uStep, vCur += vStep) {
+            if (usePortalClips && (y < floorClip[x] || y > ceilClip[x])) continue;
+            int vi = vCur >> 16;
+            if (vi < 0) vi = 0; else if (vi > maxV) vi = maxV;
+            int idx = tex[(vi << 6) + ((uCur >> 16) & 63)] & 0xFF;
+            if (idx == 0 || idx == 255) {
+                buf[rowOffset + x] = fallback;
+            } else {
+                int p = palRGB[idx];
+                int r = (((p >> 16) & 0xFF) * shade256 >> 8) + tintR;
+                int g = (((p >> 8) & 0xFF) * shade256 >> 8) + tintG;
+                int b = ((p & 0xFF) * shade256 >> 8) + tintB;
+                if (r > 255) r = 255;
+                if (g > 255) g = 255;
+                if (b > 255) b = 255;
+                buf[rowOffset + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
     private static void fillTriangleTextured(
             int x0, int y0, int u0, int v0,
             int x1, int y1, int u1, int v1,
@@ -726,48 +825,69 @@ public final class PolyRenderer3D {
         int endY = y2 >= PortalRenderer.VIEWPORT_HEIGHT ? PortalRenderer.VIEWPORT_HEIGHT - 1 : y2;
         if (startY > endY) return;
 
+        boolean useLut = totalH >= TEX_LUT_MIN_ROWS;
+        int[] lut = useLut ? buildShadeLut(palRGB, shade256, tintRGB, fallbackRGB) : null;
         short[] floorClip = Sector.floorClip;
         short[] ceilClip = Sector.ceilingClip;
         int width = PortalRenderer.VIEWPORT_WIDTH;
         int maxV = texH - 1;
-        int tintR = (tintRGB >> 16) & 0xFF, tintG = (tintRGB >> 8) & 0xFF, tintB = tintRGB & 0xFF;
-        int fbR = (fallbackRGB >> 16) & 0xFF, fbG = (fallbackRGB >> 8) & 0xFF, fbB = fallbackRGB & 0xFF;
+
+        // Edge steps in 16.16, computed once per triangle (no per-row divide).
+        long lxS = ((long) (x2 - x0) << 16) / totalH;
+        long luS = ((long) (u2 - u0) << 16) / totalH;
+        long lvS = ((long) (v2 - v0) << 16) / totalH;
+        int seg1H = y1 - y0;
+        long s1xS = 0, s1uS = 0, s1vS = 0;
+        if (seg1H > 0) {
+            s1xS = ((long) (x1 - x0) << 16) / seg1H;
+            s1uS = ((long) (u1 - u0) << 16) / seg1H;
+            s1vS = ((long) (v1 - v0) << 16) / seg1H;
+        }
+        int seg2H = y2 - y1;
+        long s2xS = 0, s2uS = 0, s2vS = 0;
+        if (seg2H > 0) {
+            s2xS = ((long) (x2 - x1) << 16) / seg2H;
+            s2uS = ((long) (u2 - u1) << 16) / seg2H;
+            s2vS = ((long) (v2 - v1) << 16) / seg2H;
+        }
 
         for (int y = startY; y <= endY; y++) {
-            boolean secondHalf = (y > y1) || (y1 == y0);
-            int segH = secondHalf ? (y2 - y1) : (y1 - y0);
-            if (segH <= 0) continue;
-
-            int dyTotal = y - y0;
-            int xa = x0 + (int) (((long) (x2 - x0) * dyTotal) / totalH);
-            long ua = ((long) u0 << 16) + (((long) (u2 - u0) << 16) * dyTotal) / totalH;
-            long va = ((long) v0 << 16) + (((long) (v2 - v0) << 16) * dyTotal) / totalH;
-
-            int xb;
-            long ub, vb;
-            if (secondHalf) {
-                int dySeg = y - y1;
-                xb = x1 + (int) (((long) (x2 - x1) * dySeg) / segH);
-                ub = ((long) u1 << 16) + (((long) (u2 - u1) << 16) * dySeg) / segH;
-                vb = ((long) v1 << 16) + (((long) (v2 - v1) << 16) * dySeg) / segH;
+            int dy = y - y0;
+            long xa16 = ((long) x0 << 16) + lxS * dy;
+            long ua16 = ((long) u0 << 16) + luS * dy;
+            long va16 = ((long) v0 << 16) + lvS * dy;
+            long xb16, ub16, vb16;
+            if (y <= y1) {
+                if (seg1H > 0) {
+                    xb16 = ((long) x0 << 16) + s1xS * dy;
+                    ub16 = ((long) u0 << 16) + s1uS * dy;
+                    vb16 = ((long) v0 << 16) + s1vS * dy;
+                } else {
+                    xb16 = (long) x1 << 16;
+                    ub16 = (long) u1 << 16;
+                    vb16 = (long) v1 << 16;
+                }
             } else {
-                xb = x0 + (int) (((long) (x1 - x0) * dyTotal) / segH);
-                ub = ((long) u0 << 16) + (((long) (u1 - u0) << 16) * dyTotal) / segH;
-                vb = ((long) v0 << 16) + (((long) (v1 - v0) << 16) * dyTotal) / segH;
+                int dys = y - y1;
+                xb16 = ((long) x1 << 16) + s2xS * dys;
+                ub16 = ((long) u1 << 16) + s2uS * dys;
+                vb16 = ((long) v1 << 16) + s2vS * dys;
             }
 
+            int xa = (int) (xa16 >> 16);
+            int xb = (int) (xb16 >> 16);
             if (xa > xb) {
                 int t = xa; xa = xb; xb = t;
-                long lt = ua; ua = ub; ub = lt;
-                lt = va; va = vb; vb = lt;
+                long lt = ua16; ua16 = ub16; ub16 = lt;
+                lt = va16; va16 = vb16; vb16 = lt;
             }
             if (xb < 0 || xa >= width) continue;
 
             int spanW = xb - xa;
-            long uStep = spanW > 0 ? (ub - ua) / spanW : 0;
-            long vStep = spanW > 0 ? (vb - va) / spanW : 0;
-            long uCur = ua;
-            long vCur = va;
+            int uStep = spanW > 0 ? (int) ((ub16 - ua16) / spanW) : 0;
+            int vStep = spanW > 0 ? (int) ((vb16 - va16) / spanW) : 0;
+            int uCur = (int) ua16;
+            int vCur = (int) va16;
             int xs = xa;
             if (xs < 0) {
                 uCur += uStep * (-xs);
@@ -775,30 +895,12 @@ public final class PolyRenderer3D {
                 xs = 0;
             }
             int xe = xb >= width ? width - 1 : xb;
-            int rowOffset = y * width;
-            for (int x = xs; x <= xe; x++) {
-                if (!usePortalClips || (y >= floorClip[x] && y <= ceilClip[x])) {
-                    int ti = (int) (uCur >> 16) & 63;
-                    int vi = (int) (vCur >> 16);
-                    if (vi < 0) vi = 0; else if (vi > maxV) vi = maxV;
-                    int idx = tex[(vi << 6) + ti] & 0xFF;
-                    int c;
-                    if (idx == 0 || idx == 255) {
-                        c = fallbackRGB;
-                    } else {
-                        int p = palRGB[idx];
-                        int r = (((p >> 16) & 0xFF) * shade256 >> 8) + tintR;
-                        int g = (((p >> 8) & 0xFF) * shade256 >> 8) + tintG;
-                        int b = ((p & 0xFF) * shade256 >> 8) + tintB;
-                        if (r > 255) r = 255;
-                        if (g > 255) g = 255;
-                        if (b > 255) b = 255;
-                        c = (r << 16) | (g << 8) | b;
-                    }
-                    screenBuffer[rowOffset + x] = 0xFF000000 | c;
-                }
-                uCur += uStep;
-                vCur += vStep;
+            if (useLut) {
+                drawTexSpan(screenBuffer, y * width, xs, xe, y, uCur, uStep, vCur, vStep,
+                        tex, maxV, lut, usePortalClips, floorClip, ceilClip);
+            } else {
+                drawTexSpanShaded(screenBuffer, y * width, xs, xe, y, uCur, uStep, vCur, vStep,
+                        tex, maxV, palRGB, shade256, tintRGB, fallbackRGB, usePortalClips, floorClip, ceilClip);
             }
         }
     }
@@ -846,16 +948,25 @@ public final class PolyRenderer3D {
         short[] ceilClip = Sector.ceilingClip;
         int width = PortalRenderer.VIEWPORT_WIDTH;
 
+        // Edge steps in 16.16, computed once per triangle (no per-row divide).
+        long lxS = ((long) (x2 - x0) << 16) / totalH;
+        int seg1H = y1 - y0;
+        long s1S = seg1H > 0 ? ((long) (x1 - x0) << 16) / seg1H : 0;
+        int seg2H = y2 - y1;
+        long s2S = seg2H > 0 ? ((long) (x2 - x1) << 16) / seg2H : 0;
+
         for (int y = startY; y <= endY; y++) {
-            boolean secondHalf = (y > y1) || (y1 == y0);
-            int segH = secondHalf ? (y2 - y1) : (y1 - y0);
-            if (segH <= 0) continue;
+            int dy = y - y0;
+            long xa16 = ((long) x0 << 16) + lxS * dy;
+            long xb16;
+            if (y <= y1) {
+                xb16 = seg1H > 0 ? ((long) x0 << 16) + s1S * dy : (long) x1 << 16;
+            } else {
+                xb16 = ((long) x1 << 16) + s2S * (y - y1);
+            }
 
-            int xa = x0 + ((x2 - x0) * (y - y0)) / totalH;
-            int xb = secondHalf
-                    ? (x1 + ((x2 - x1) * (y - y1)) / segH)
-                    : (x0 + ((x1 - x0) * (y - y0)) / segH);
-
+            int xa = (int) (xa16 >> 16);
+            int xb = (int) (xb16 >> 16);
             if (xa > xb) { int t = xa; xa = xb; xb = t; }
             if (xb < 0 || xa >= width) continue;
             if (xa < 0) xa = 0;
