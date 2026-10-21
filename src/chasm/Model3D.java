@@ -58,6 +58,14 @@ public final class Model3D {
     public int[] triVertRGB1;
     public int[] triVertRGB2;
 
+    // Texture Mapping: per-triangle corner UVs (texel U 0..63, texel V 0..texH-1), 3 entries per triangle
+    public byte[] triU;
+    public short[] triV;
+
+    // Texture atlas for texture mapping: 64 texels wide, 8-bit palette indices (index 0/255 = holes)
+    public byte[] texData;
+    public int texH;
+
     // Keyframe vertex positions: frameVerts[frame][v * 3 + 0..2] in 1/2048 tile units
     public short[][] frameVerts;
 
@@ -85,6 +93,16 @@ public final class Model3D {
         m.triVertRGB0 = new int[tc];
         m.triVertRGB1 = new int[tc];
         m.triVertRGB2 = new int[tc];
+        m.triU = new byte[tc * 3];
+        m.triV = new short[tc * 3];
+
+        // Texture atlas (texH = 0 for detached limbs, which reuse the parent's atlas)
+        int th = dis.readUnsignedShort();
+        m.texH = th;
+        if (th > 0) {
+            m.texData = new byte[th * 64];
+            dis.readFully(m.texData);
+        }
 
         for (int t = 0; t < tc; t++) {
             m.triV0[t] = dis.readByte();
@@ -107,6 +125,13 @@ public final class Model3D {
             m.triVertRGB0[t] = (r0 << 16) | (g0 << 8) | b0;
             m.triVertRGB1[t] = (r1 << 16) | (g1 << 8) | b1;
             m.triVertRGB2[t] = (r2 << 16) | (g2 << 8) | b2;
+
+            m.triU[t * 3] = dis.readByte();
+            m.triU[t * 3 + 1] = dis.readByte();
+            m.triU[t * 3 + 2] = dis.readByte();
+            m.triV[t * 3] = dis.readShort();
+            m.triV[t * 3 + 1] = dis.readShort();
+            m.triV[t * 3 + 2] = dis.readShort();
         }
 
         m.frameVerts = new short[fc][vc * 3];
@@ -134,7 +159,11 @@ public final class Model3D {
                 if (subCount > 0) {
                     m.submodels = new Model3D[subCount];
                     for (int s = 0; s < subCount; s++) {
-                        m.submodels[s] = readMesh(dis);
+                        Model3D sub = readMesh(dis);
+                        // Detached limbs are cut from the same .CAR, so they share its texture atlas.
+                        sub.texData = m.texData;
+                        sub.texH = m.texH;
+                        m.submodels[s] = sub;
                     }
                 }
                 models[i] = m;

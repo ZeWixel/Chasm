@@ -411,7 +411,9 @@ def parse_polygons_exact(poly_bytes, pcount, vcount, tex, tex_h, base_verts, is_
                 vb = max(12, min(255, int(vb * ao)))
                 vcols.append((vr, vg, vb))
 
-            tris.append((ia, ib, ic, gmask, flags & 0xFF, (nx, ny, nz), (fr, fg, fb), vcols))
+            tuv = (tri_uv[0][0], tri_uv[1][0], tri_uv[2][0],
+                   tri_uv[0][1], tri_uv[1][1], tri_uv[2][1])
+            tris.append((ia, ib, ic, gmask, flags & 0xFF, (nx, ny, nz), (fr, fg, fb), vcols, tuv))
 
     return tris
 
@@ -511,7 +513,7 @@ def extract_car_model_with_submodels(car_name):
         submodels.append((sv_cnt, s_tris, s_frames))
         sub_off += 0x4806 + s_sz
 
-    return vcount, tris, frames, submodels
+    return vcount, tris, frames, submodels, tex, tex_h
 
 
 def extract_3o_weapon_model(model_name, stat_ani, shoot_ani):
@@ -544,7 +546,7 @@ def extract_3o_weapon_model(model_name, stat_ani, shoot_ani):
     tris = parse_polygons_exact(
         data[0x00:pc * 32], pc, vc, tex, tex_h, frames[0], is_car=False, v_shift=v_shift
     )
-    return vc, tris, frames, []
+    return vc, tris, frames, [], tex, tex_h
 
 
 def extract_3o_world_model(model_name, scale=1.0):
@@ -560,16 +562,32 @@ def extract_3o_world_model(model_name, scale=1.0):
     tris = parse_polygons_exact(
         data[0x00:pc * 32], pc, vc, tex, tex_h, verts, is_car=False, v_shift=v_shift
     )
-    return vc, tris, [verts], []
+    return vc, tris, [verts], [], tex, tex_h
 
 
-def serialize_mesh(vc, tris, frames):
+def serialize_mesh(vc, tris, frames, tex=b"", tex_h=0):
+    """
+    Mesh record (big-endian):
+      u16 vCount, u16 triCount, u16 frameCount
+      u16 texH, texH*64 bytes palette indices (64 texels wide; texH=0 -> reuse parent texture)
+      per triangle: 3 x u8 vertex index, u8 group, u8 flags, 3 x s8 normal, 3 x u8 flat RGB,
+                    3 x RGB vertex colours, 3 x u8 texture U, 3 x u16 texture V
+      frames: vCount x 3 x s16 per frame
+    """
     buf = bytearray()
     buf.extend(struct.pack(">HHH", vc, len(tris), len(frames)))
-    for ia, ib, ic, gmask, flags, (nx, ny, nz), (fr, fg, fb), vcols in tris:
+    tex_bytes = bytes(tex[:64 * tex_h]) if tex_h > 0 else b""
+    if tex_h > 0 and len(tex_bytes) < 64 * tex_h:
+        tex_bytes = tex_bytes + bytes(64 * tex_h - len(tex_bytes))
+    buf.extend(struct.pack(">H", tex_h if tex_h > 0 else 0))
+    buf.extend(tex_bytes)
+    for ia, ib, ic, gmask, flags, (nx, ny, nz), (fr, fg, fb), vcols, tuv in tris:
         buf.extend(struct.pack(">BBBBBbbbBBB", ia, ib, ic, gmask & 0xFF, flags & 0xFF, nx, ny, nz, fr, fg, fb))
         for vr, vg, vb in vcols:
             buf.extend(struct.pack(">BBB", vr, vg, vb))
+        u0, u1, u2, v0, v1, v2 = tuv
+        buf.extend(struct.pack(">BBBHHH", u0 & 0xFF, u1 & 0xFF, u2 & 0xFF,
+                               max(0, min(65535, v0)), max(0, min(65535, v1)), max(0, min(65535, v2))))
     for fverts in frames:
         for vx, vy, vz in fverts:
             buf.extend(struct.pack(">hhh", max(-32767, min(32767, vx)), max(-32767, min(32767, vy)), max(-32767, min(32767, vz))))
@@ -632,10 +650,11 @@ def build_models_pack():
     out.extend(struct.pack(">H", len(all_models)))
     total_tris = 0
     total_sub_tris = 0
-    for vc, tris, frames, subs in all_models:
+    for vc, tris, frames, subs, tex, tex_h in all_models:
         total_tris += len(tris)
-        out.extend(serialize_mesh(vc, tris, frames))
+        out.extend(serialize_mesh(vc, tris, frames, tex, tex_h))
         out.append(len(subs))
+        # Detached limbs reuse the parent's texture atlas (texH = 0 in their record).
         for svc, stris, sframes in subs:
             total_sub_tris += len(stris)
             out.extend(serialize_mesh(svc, stris, sframes))
@@ -1260,8 +1279,35 @@ def build_midi_soundtrack():
 build_midi_soundtrack()
 
 
+# ---------------------------------------------------------------------------
+# 4b. UI pack (main-menu logo, tiled menu background, HUD bar), restored from the first build
+# ---------------------------------------------------------------------------
+def build_ui_pack():
+    """
+    /ui.bin: three images, each as u16 width, u16 height, then width*height palette indices.
+    Index 255 is transparent. Order: LOADING.CEL logo (128x76), M_TILE1.CEL background tile (64x64),
+    STATUS2.CEL HUD strip (160x32).
+    """
+    ui_buf = bytearray()
+    for uname, tw, th in [("LOADING.CEL", 128, 76), ("M_TILE1.CEL", 64, 64), ("STATUS2.CEL", 160, 32)]:
+        cdata = csm.read(uname)
+        _, sw, sh = struct.unpack("<3H", cdata[:6])
+        spix = cdata[800:800 + sw * sh]
+        ui_buf.extend(struct.pack(">HH", tw, th))
+        for y in range(th):
+            sy = (y * sh) // th
+            for x in range(tw):
+                sx = (x * sw) // tw
+                ui_buf.append(spix[sy * sw + sx])
+    with open(os.path.join(RES_DIR, "ui.bin"), "wb") as f:
+        f.write(ui_buf)
+    print(f"[OK] Wrote ui.bin ({len(ui_buf)} bytes)")
+
+
+
 if __name__ == "__main__":
     build_c3d2_materials()
     build_models_pack()
+    build_ui_pack()
     build_all_levels()
     print("[SUCCESS] All Chasm C3D2/C3B & 3D polygonal assets built into /home/user/Chasm/res/")

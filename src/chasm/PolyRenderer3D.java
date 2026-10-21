@@ -27,6 +27,12 @@ package chasm;
 public final class PolyRenderer3D {
     public static final int SHADE_VERTEX_PAINT = 0;
     public static final int SHADE_FLAT = 1;
+    /** Flat-shaded triangles coloured from their averaged vertex colours. */
+    public static final int SHADE_FLAT_VERTEX = 2;
+    /** Affine texture-mapped triangles sampled from the model's 64-wide palette atlas. */
+    public static final int SHADE_TEXTURE = 3;
+    public static final int SHADE_MODE_COUNT = 4;
+    public static final String[] SHADE_NAMES = { "VERTEX COLOR", "FLAT", "FLAT+VERTEX", "TEXTURE" };
 
     // 1 raw vertex unit (1/2048 Chasm cell) in 16.16 fixed-point C3D units:
     // 56 C3D units per cell -> (56 << 16) / 2048 = 1792
@@ -59,8 +65,46 @@ public final class PolyRenderer3D {
     private final int[] entIdx  = new int[96];
     private final int[] entDepth = new int[96];
 
+    /** RGB lookup for texture atlas palette indices (loaded from /pal.bin). */
+    private final int[] texRGB = new int[256];
+
     public PolyRenderer3D(Model3D[] models) {
         this.models = models;
+        loadTexturePalette();
+    }
+
+    private void loadTexturePalette() {
+        java.io.InputStream is = null;
+        try {
+            is = PolyRenderer3D.class.getResourceAsStream("/pal.bin");
+            byte[] pal = new byte[768];
+            int got = 0;
+            if (is != null) {
+                while (got < 768) {
+                    int n = is.read(pal, got, 768 - got);
+                    if (n <= 0) break;
+                    got += n;
+                }
+            }
+            for (int i = 0; i < 256; i++) {
+                if (got >= 768) {
+                    texRGB[i] = ((pal[i * 3] & 0xFF) << 16) | ((pal[i * 3 + 1] & 0xFF) << 8) | (pal[i * 3 + 2] & 0xFF);
+                } else {
+                    texRGB[i] = (i << 16) | (i << 8) | i;
+                }
+            }
+        } catch (Exception e) {
+            for (int i = 0; i < 256; i++) texRGB[i] = (i << 16) | (i << 8) | i;
+        } finally {
+            if (is != null) {
+                try { is.close(); } catch (Exception ex) {}
+            }
+        }
+    }
+
+    /** Cycles to the next polygon shading mode (used by the pause menu and main menu). */
+    public void cycleShadingMode() {
+        shadingMode = (shadingMode + 1) % SHADE_MODE_COUNT;
     }
 
     public Model3D getModel(int id) {
@@ -201,7 +245,8 @@ public final class PolyRenderer3D {
                 int mType = world.monType[idx];
                 Model3D model = getModel(mType);
                 if (model != null) {
-                    int tint = world.monPainTimer[idx] > 0 ? 0xFF3020 : 0;
+                    // Brief additive blood-red glow while the hit flash is active (never a solid red override)
+                    int tint = world.monPainTimer[idx] > 0 ? 0x6A1408 : 0;
                     renderWorldModel(
                         model,
                         world.monX[idx], floorHFixed, world.monZ[idx],
@@ -265,11 +310,15 @@ public final class PolyRenderer3D {
             } else if (type == ENT_PROJ) {
                 Model3D model = getModel(world.projModelId[idx]);
                 if (model != null) {
-                    int scale = (world.projModelId[idx] >= 33) ? (MODEL_TO_WORLD_FP * 3) >> 2 : MODEL_TO_WORLD_FP;
+                    int pid = world.projModelId[idx];
+                    int scale = (pid == GameWorld.PROJ_GIB) ? (MODEL_TO_WORLD_FP * 3) >> 2 : MODEL_TO_WORLD_FP;
+                    int pAngle = (pid == GameWorld.PROJ_DISK)
+                            ? MathUtils.wrapAngle(world.projAngle[idx] + world.projSpin[idx])
+                            : world.projAngle[idx];
                     renderWorldModel(
                         model,
                         world.projX[idx], world.projY[idx], world.projZ[idx],
-                        world.projAngle[idx],
+                        pAngle,
                         0, 0, 0,
                         0xFF,
                         scale,
@@ -461,25 +510,7 @@ public final class PolyRenderer3D {
             int totalShade = (distAtten * dirShade) >> 8;
             if (totalShade > 256) totalShade = 256;
 
-            if (shadingMode == SHADE_FLAT) {
-                int rgb = applyShadeAndTint(model.triFlatRGB[t], totalShade, tintRGB);
-                fillTriangleFlat(
-                    scrX[i0], scrY[i0],
-                    scrX[i1], scrY[i1],
-                    scrX[i2], scrY[i2],
-                    rgb, usePortalClips, screenBuffer
-                );
-            } else {
-                int c0 = applyShadeAndTint(model.triVertRGB0[t], totalShade, tintRGB);
-                int c1 = applyShadeAndTint(model.triVertRGB1[t], totalShade, tintRGB);
-                int c2 = applyShadeAndTint(model.triVertRGB2[t], totalShade, tintRGB);
-                fillTriangleVertexColor(
-                    scrX[i0], scrY[i0], c0,
-                    scrX[i1], scrY[i1], c1,
-                    scrX[i2], scrY[i2], c2,
-                    usePortalClips, screenBuffer
-                );
-            }
+            drawModelTriangle(model, t, i0, i1, i2, totalShade, tintRGB, usePortalClips, screenBuffer);
         }
     }
 
@@ -589,7 +620,7 @@ public final class PolyRenderer3D {
         }
 
         int baseShade = muzzleFlash ? 256 : 228;
-        int tint = muzzleFlash ? 0x382810 : 0;
+        int tint = muzzleFlash ? 0x203008 : 0;
 
         for (int k = 0; k < visCount; k++) {
             int t = visTriIdx[k];
@@ -602,24 +633,172 @@ public final class PolyRenderer3D {
             if (shade < 160) shade = 160;
             if (shade > 256) shade = 256;
 
-            if (shadingMode == SHADE_FLAT) {
-                int rgb = applyShadeAndTint(weaponModel.triFlatRGB[t], shade, tint);
-                fillTriangleFlat(
-                    scrX[i0], scrY[i0],
-                    scrX[i1], scrY[i1],
-                    scrX[i2], scrY[i2],
-                    rgb, false, screenBuffer
-                );
+            drawModelTriangle(weaponModel, t, i0, i1, i2, shade, tint, false, screenBuffer);
+        }
+    }
+
+    /**
+     * Applies directional/distance shade, then an ADDITIVE flash colour (tintRGB).
+     * Additive flashes brighten the polygon instead of overwriting its vertex colours,
+     * so a hit reads as a short red glow rather than a solid red enemy.
+     */
+    /**
+     * Rasterizes one projected triangle according to the active shading mode:
+     *   SHADE_VERTEX_PAINT  Gouraud-interpolated vertex colours
+     *   SHADE_FLAT          one flat colour per polygon
+     *   SHADE_FLAT_VERTEX   one colour per polygon = average of its vertex colours
+     *   SHADE_TEXTURE       affine texture mapping from the model atlas (flat colour for holes)
+     */
+    private void drawModelTriangle(Model3D model, int t, int i0, int i1, int i2,
+                                   int totalShade, int tintRGB, boolean usePortalClips, int[] screenBuffer) {
+        int mode = shadingMode;
+        if (mode == SHADE_TEXTURE && model.texData == null) {
+            mode = SHADE_FLAT;
+        }
+        if (mode == SHADE_TEXTURE) {
+            int fallback = applyShadeAndTint(model.triFlatRGB[t], totalShade, tintRGB);
+            fillTriangleTextured(
+                scrX[i0], scrY[i0], model.triU[t * 3] & 0xFF, model.triV[t * 3] & 0xFFFF,
+                scrX[i1], scrY[i1], model.triU[t * 3 + 1] & 0xFF, model.triV[t * 3 + 1] & 0xFFFF,
+                scrX[i2], scrY[i2], model.triU[t * 3 + 2] & 0xFF, model.triV[t * 3 + 2] & 0xFFFF,
+                model.texData, model.texH, texRGB, totalShade, fallback, tintRGB,
+                usePortalClips, screenBuffer
+            );
+        } else if (mode == SHADE_VERTEX_PAINT) {
+            int c0 = applyShadeAndTint(model.triVertRGB0[t], totalShade, tintRGB);
+            int c1 = applyShadeAndTint(model.triVertRGB1[t], totalShade, tintRGB);
+            int c2 = applyShadeAndTint(model.triVertRGB2[t], totalShade, tintRGB);
+            fillTriangleVertexColor(
+                scrX[i0], scrY[i0], c0,
+                scrX[i1], scrY[i1], c1,
+                scrX[i2], scrY[i2], c2,
+                usePortalClips, screenBuffer
+            );
+        } else {
+            int rgb;
+            if (mode == SHADE_FLAT_VERTEX) {
+                int a = model.triVertRGB0[t], b = model.triVertRGB1[t], c = model.triVertRGB2[t];
+                int r = (((a >> 16) & 0xFF) + ((b >> 16) & 0xFF) + ((c >> 16) & 0xFF)) / 3;
+                int g = (((a >> 8) & 0xFF) + ((b >> 8) & 0xFF) + ((c >> 8) & 0xFF)) / 3;
+                int bl = ((a & 0xFF) + (b & 0xFF) + (c & 0xFF)) / 3;
+                rgb = applyShadeAndTint((r << 16) | (g << 8) | bl, totalShade, tintRGB);
             } else {
-                int c0 = applyShadeAndTint(weaponModel.triVertRGB0[t], shade, tint);
-                int c1 = applyShadeAndTint(weaponModel.triVertRGB1[t], shade, tint);
-                int c2 = applyShadeAndTint(weaponModel.triVertRGB2[t], shade, tint);
-                fillTriangleVertexColor(
-                    scrX[i0], scrY[i0], c0,
-                    scrX[i1], scrY[i1], c1,
-                    scrX[i2], scrY[i2], c2,
-                    false, screenBuffer
-                );
+                rgb = applyShadeAndTint(model.triFlatRGB[t], totalShade, tintRGB);
+            }
+            fillTriangleFlat(
+                scrX[i0], scrY[i0],
+                scrX[i1], scrY[i1],
+                scrX[i2], scrY[i2],
+                rgb, usePortalClips, screenBuffer
+            );
+        }
+    }
+
+    /**
+     * Affine texture-mapped triangle fill (no Z-buffer, painter's order handled by the caller).
+     * Texel index 0 / 255 are treated as holes and show the flat fallback colour.
+     */
+    private static void fillTriangleTextured(
+            int x0, int y0, int u0, int v0,
+            int x1, int y1, int u1, int v1,
+            int x2, int y2, int u2, int v2,
+            byte[] tex, int texH, int[] palRGB, int shade256, int fallbackRGB, int tintRGB,
+            boolean usePortalClips, int[] screenBuffer) {
+
+        if (texH <= 0) return;
+        // Sort by Y ascending
+        if (y0 > y1) {
+            int t = x0; x0 = x1; x1 = t; t = y0; y0 = y1; y1 = t;
+            t = u0; u0 = u1; u1 = t; t = v0; v0 = v1; v1 = t;
+        }
+        if (y1 > y2) {
+            int t = x1; x1 = x2; x2 = t; t = y1; y1 = y2; y2 = t;
+            t = u1; u1 = u2; u2 = t; t = v1; v1 = v2; v2 = t;
+        }
+        if (y0 > y1) {
+            int t = x0; x0 = x1; x1 = t; t = y0; y0 = y1; y1 = t;
+            t = u0; u0 = u1; u1 = t; t = v0; v0 = v1; v1 = t;
+        }
+
+        int totalH = y2 - y0;
+        if (totalH <= 0) return;
+        int startY = y0 < 0 ? 0 : y0;
+        int endY = y2 >= PortalRenderer.VIEWPORT_HEIGHT ? PortalRenderer.VIEWPORT_HEIGHT - 1 : y2;
+        if (startY > endY) return;
+
+        short[] floorClip = Sector.floorClip;
+        short[] ceilClip = Sector.ceilingClip;
+        int width = PortalRenderer.VIEWPORT_WIDTH;
+        int maxV = texH - 1;
+        int tintR = (tintRGB >> 16) & 0xFF, tintG = (tintRGB >> 8) & 0xFF, tintB = tintRGB & 0xFF;
+        int fbR = (fallbackRGB >> 16) & 0xFF, fbG = (fallbackRGB >> 8) & 0xFF, fbB = fallbackRGB & 0xFF;
+
+        for (int y = startY; y <= endY; y++) {
+            boolean secondHalf = (y > y1) || (y1 == y0);
+            int segH = secondHalf ? (y2 - y1) : (y1 - y0);
+            if (segH <= 0) continue;
+
+            int dyTotal = y - y0;
+            int xa = x0 + (int) (((long) (x2 - x0) * dyTotal) / totalH);
+            long ua = ((long) u0 << 16) + (((long) (u2 - u0) << 16) * dyTotal) / totalH;
+            long va = ((long) v0 << 16) + (((long) (v2 - v0) << 16) * dyTotal) / totalH;
+
+            int xb;
+            long ub, vb;
+            if (secondHalf) {
+                int dySeg = y - y1;
+                xb = x1 + (int) (((long) (x2 - x1) * dySeg) / segH);
+                ub = ((long) u1 << 16) + (((long) (u2 - u1) << 16) * dySeg) / segH;
+                vb = ((long) v1 << 16) + (((long) (v2 - v1) << 16) * dySeg) / segH;
+            } else {
+                xb = x0 + (int) (((long) (x1 - x0) * dyTotal) / segH);
+                ub = ((long) u0 << 16) + (((long) (u1 - u0) << 16) * dyTotal) / segH;
+                vb = ((long) v0 << 16) + (((long) (v1 - v0) << 16) * dyTotal) / segH;
+            }
+
+            if (xa > xb) {
+                int t = xa; xa = xb; xb = t;
+                long lt = ua; ua = ub; ub = lt;
+                lt = va; va = vb; vb = lt;
+            }
+            if (xb < 0 || xa >= width) continue;
+
+            int spanW = xb - xa;
+            long uStep = spanW > 0 ? (ub - ua) / spanW : 0;
+            long vStep = spanW > 0 ? (vb - va) / spanW : 0;
+            long uCur = ua;
+            long vCur = va;
+            int xs = xa;
+            if (xs < 0) {
+                uCur += uStep * (-xs);
+                vCur += vStep * (-xs);
+                xs = 0;
+            }
+            int xe = xb >= width ? width - 1 : xb;
+            int rowOffset = y * width;
+            for (int x = xs; x <= xe; x++) {
+                if (!usePortalClips || (y >= floorClip[x] && y <= ceilClip[x])) {
+                    int ti = (int) (uCur >> 16) & 63;
+                    int vi = (int) (vCur >> 16);
+                    if (vi < 0) vi = 0; else if (vi > maxV) vi = maxV;
+                    int idx = tex[(vi << 6) + ti] & 0xFF;
+                    int c;
+                    if (idx == 0 || idx == 255) {
+                        c = fallbackRGB;
+                    } else {
+                        int p = palRGB[idx];
+                        int r = (((p >> 16) & 0xFF) * shade256 >> 8) + tintR;
+                        int g = (((p >> 8) & 0xFF) * shade256 >> 8) + tintG;
+                        int b = ((p & 0xFF) * shade256 >> 8) + tintB;
+                        if (r > 255) r = 255;
+                        if (g > 255) g = 255;
+                        if (b > 255) b = 255;
+                        c = (r << 16) | (g << 8) | b;
+                    }
+                    screenBuffer[rowOffset + x] = 0xFF000000 | c;
+                }
+                uCur += uStep;
+                vCur += vStep;
             }
         }
     }
@@ -629,9 +808,9 @@ public final class PolyRenderer3D {
         int g = (((rgb >> 8) & 0xFF) * shade256) >> 8;
         int b = ((rgb & 0xFF) * shade256) >> 8;
         if (tintRGB != 0) {
-            r = (r + ((tintRGB >> 16) & 0xFF)) >> 1;
-            g = (g + ((tintRGB >> 8) & 0xFF)) >> 1;
-            b = (b + (tintRGB & 0xFF)) >> 1;
+            r += (tintRGB >> 16) & 0xFF;
+            g += (tintRGB >> 8) & 0xFF;
+            b += tintRGB & 0xFF;
         }
         if (r > 255) r = 255;
         if (g > 255) g = 255;

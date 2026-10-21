@@ -79,7 +79,7 @@ public class ChasmMIDlet extends MIDlet {
                 byte[] data = rs.getRecord(1);
                 if (data != null && data.length >= 4) {
                     canvas.setSelectedStartLevel(data[0]);
-                    canvas.getRenderer3D().shadingMode = data[1] & 1;
+                    canvas.getRenderer3D().shadingMode = data[1] & 3;
                     sound.musicEnabled = (data[2] != 0);
                     sound.sfxEnabled = (data[3] != 0);
                 }

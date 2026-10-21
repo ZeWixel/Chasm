@@ -199,6 +199,10 @@ public final class GameWorld {
 
     // ==================== 3D Projectiles & Gibs ====================
     public static final int MAX_PROJ = 24;
+    /** Projectile model ids (models.bin): 33 = gib particle, 34 = saw-disk, 35 = energy bolt. */
+    public static final int PROJ_GIB  = 33;
+    public static final int PROJ_DISK = 34;
+    public static final int PROJ_BOLT = 35;
     public final boolean[] projActive    = new boolean[MAX_PROJ];
     public final boolean[] projFromPlayer= new boolean[MAX_PROJ];
     public final int[] projModelId       = new int[MAX_PROJ];
@@ -209,6 +213,7 @@ public final class GameWorld {
     public final int[] projVY            = new int[MAX_PROJ];
     public final int[] projVZ            = new int[MAX_PROJ];
     public final int[] projAngle         = new int[MAX_PROJ];
+    public final int[] projSpin          = new int[MAX_PROJ];
     public final int[] projDamage        = new int[MAX_PROJ];
     public final int[] projLife          = new int[MAX_PROJ];
     public final Sector[] projSector     = new Sector[MAX_PROJ];
@@ -654,19 +659,21 @@ public final class GameWorld {
         SoundManager.playSfx(sfx);
 
         if (curWeapon >= 3) {
-            // Projectile weapon (Crossbow bolt, Sawblade disc, or Megazapper plasma)
+            // Projectile weapons (Crossbow / Megazapper bolt, Sawblade disc). Damage is applied
+            // only when the projectile reaches a monster, so there is no double hit.
             spawnProjectile(
                 true,
-                curWeapon == 4 ? 32 : 31, // 32 = Sawblade disc, 31 = Rocket/Bolt
+                (curWeapon == 4) ? PROJ_DISK : PROJ_BOLT,
                 playerBody.x,
                 playerBody.y - (8 << 16),
                 playerBody.z,
                 playerBody.rotation,
                 WEAPON_DAMAGE[curWeapon]
             );
+            return true;
         }
 
-        // Perform hitscan raycast in view cone so immediate aim always registers
+        // Hitscan weapons (Rift Rifle, Double Shotgun, Volcano Chaingun)
         performHitscanAttack(WEAPON_DAMAGE[curWeapon]);
         return true;
     }
@@ -855,7 +862,8 @@ public final class GameWorld {
         }
         if (slot < 0) slot = levelTick % MAX_PROJ;
 
-        int speed = (modelId >= 33) ? 5 : 18;
+        boolean gib = (modelId == PROJ_GIB);
+        int speed = (modelId == PROJ_DISK) ? 14 : (gib ? 5 : 18);
         projActive[slot] = true;
         projFromPlayer[slot] = fromPlayer;
         projModelId[slot] = modelId;
@@ -863,11 +871,12 @@ public final class GameWorld {
         projY[slot] = y;
         projZ[slot] = z;
         projVX[slot] = MathUtils.fastSin(angle) * speed;
-        projVY[slot] = (modelId >= 33) ? (3 << 16) : 0;
+        projVY[slot] = gib ? (3 << 16) : 0;
         projVZ[slot] = MathUtils.fastCos(angle) * speed;
         projAngle[slot] = angle;
+        projSpin[slot] = 0;
         projDamage[slot] = damage;
-        projLife[slot] = (modelId >= 33) ? 18 : 35;
+        projLife[slot] = gib ? 18 : (modelId == PROJ_DISK ? 40 : 35);
         projSector[slot] = getSectorAtPoint(x, z);
     }
 
@@ -977,7 +986,7 @@ public final class GameWorld {
             int nx = projX[i] + projVX[i];
             int nz = projZ[i] + projVZ[i];
 
-            if (projModelId[i] >= 33) {
+            if (projModelId[i] == PROJ_GIB) {
                 // Gib particle with gravity
                 projY[i] += projVY[i];
                 projVY[i] -= (1 << 16);
@@ -998,7 +1007,10 @@ public final class GameWorld {
 
             projX[i] = nx;
             projZ[i] = nz;
-            projAngle[i] = MathUtils.wrapAngle(projAngle[i] + 32000);
+            // Bolts keep their heading; saw-disks spin around their travel direction.
+            if (projModelId[i] == PROJ_DISK) {
+                projSpin[i] = MathUtils.wrapAngle(projSpin[i] + 32000);
+            }
             projSector[i] = getSectorAtPoint(nx, nz);
 
             if (projFromPlayer[i]) {

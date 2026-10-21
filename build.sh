@@ -54,7 +54,7 @@ MIDlet-Name: Chasm: The Rift
 MIDlet-Version: 1.0.0
 MIDlet-Vendor: Action Forms / J2ME Port
 MIDlet-Icon: /icon.png
-MIDlet-Description: 3D FPS Raycaster + Polygonal Engine for Nokia S60 & Sony Ericsson
+MIDlet-Description: 3D FPS with C3D2 portal renderer and polygonal 3D entities for Nokia S60 & Sony Ericsson
 MIDlet-1: Chasm: The Rift, /icon.png, chasm.ChasmMIDlet
 MicroEdition-Profile: MIDP-2.0
 MicroEdition-Configuration: CLDC-1.1
@@ -89,7 +89,7 @@ MIDlet-Name: Chasm: The Rift
 MIDlet-Version: 1.0.0
 MIDlet-Vendor: Action Forms / J2ME Port
 MIDlet-Icon: /icon.png
-MIDlet-Description: 3D FPS Raycaster + Polygonal Engine for Nokia S60 & Sony Ericsson
+MIDlet-Description: 3D FPS with C3D2 portal renderer and polygonal 3D entities for Nokia S60 & Sony Ericsson
 MIDlet-1: Chasm: The Rift, /icon.png, chasm.ChasmMIDlet
 MIDlet-Jar-URL: ChasmTheRift.jar
 MIDlet-Jar-Size: ${JAR_SIZE}
@@ -97,8 +97,6 @@ MicroEdition-Profile: MIDP-2.0
 MicroEdition-Configuration: CLDC-1.1
 EOF
 
-cp "${ROOT_DIR}/releases/ChasmTheRift.jar" "${ROOT_DIR}/ChasmTheRift.jar"
-cp "${ROOT_DIR}/releases/ChasmTheRift.jad" "${ROOT_DIR}/ChasmTheRift.jad"
 
 rm -rf /tmp/chasm_build
 echo "=== BUILD COMPLETE: releases/ChasmTheRift.jar (${JAR_SIZE} bytes) & releases/ChasmTheRift.jad ==="

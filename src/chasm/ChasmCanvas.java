@@ -27,6 +27,8 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private static final int KEY_SOFT_RIGHT2 = -22;
     private static final int KEY_SE_BACK     = -11;
 
+    private static final String[] SHADE_TAGS = { "VC", "FL", "FV", "TX" };
+
     private final ChasmMIDlet midlet;
     private final SoundManager sound;
     private final GameWorld world;
@@ -262,19 +264,44 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     }
 
     private void drawMainMenu(Graphics g) {
-        // Render live 3D BSP-Portal + 3D Monster scene in background
-        world.render3DView(PortalRenderer.screenBuffer);
-        blitViewport(g);
+        UiAssets.ensureLoaded();
 
-        // Fill bottom HUD area
-        g.setColor(0x121412);
-        g.fillRect(0, viewH, scrW, hudH);
+        // First-build menu look: tiled M_TILE1 background, LOADING.CEL logo, option list.
+        if (UiAssets.tile != null && UiAssets.tileW > 0) {
+            for (int y = 0; y < scrH; y += UiAssets.tileH) {
+                for (int x = 0; x < scrW; x += UiAssets.tileW) {
+                    g.drawRGB(UiAssets.tile, 0, UiAssets.tileW, x, y, UiAssets.tileW, UiAssets.tileH, true);
+                }
+            }
+        } else {
+            g.setColor(0x121412);
+            g.fillRect(0, 0, scrW, scrH);
+        }
 
-        // Translucent-style dark menu panel
-        int boxW = scrW - 24;
-        int boxH = 196;
-        int boxX = 12;
-        int boxY = Math.max(8, (scrH - boxH) >> 1);
+        int topY = 6;
+        if (UiAssets.logo != null && UiAssets.logoW > 0) {
+            int lx = (scrW - UiAssets.logoW) >> 1;
+            g.drawRGB(UiAssets.logo, 0, UiAssets.logoW, lx, topY, UiAssets.logoW, UiAssets.logoH, true);
+            topY += UiAssets.logoH + 6;
+        }
+
+        String shadeStr = PolyRenderer3D.SHADE_NAMES[world.polyRenderer.shadingMode];
+        String soundStr = (sound != null && sound.musicEnabled) ? "ON" : "OFF";
+
+        String[] items = {
+            "NEW / START MISSION",
+            "MAP: " + GameWorld.LEVEL_NAMES[selectedStartLevel],
+            "3D SHADING: " + shadeStr,
+            "AUDIO (MIDI+WAV): " + soundStr,
+            "CONTROLS & HELP",
+            "EXIT GAME"
+        };
+
+        int boxW = scrW - 20;
+        int boxH = 6 * 22 + 14;
+        int boxX = 10;
+        int boxY = topY + 2;
+        if (boxY + boxH > scrH - hudH - 4) boxY = scrH - hudH - 4 - boxH;
 
         g.setColor(0x101410);
         g.fillRect(boxX, boxY, boxW, boxH);
@@ -283,31 +310,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.setColor(0x52401C);
         g.drawRect(boxX + 2, boxY + 2, boxW - 5, boxH - 5);
 
-        Font titleFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_MEDIUM);
         Font smallFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
-        g.setFont(titleFont);
-        g.setColor(0xFFCC44);
-        g.drawString("CHASM: THE RIFT", scrW >> 1, boxY + 8, Graphics.TOP | Graphics.HCENTER);
-
         g.setFont(smallFont);
-        g.setColor(0x90B088);
-        g.drawString("C3D2 PORTAL + 3D CAR ENGINE", scrW >> 1, boxY + 26, Graphics.TOP | Graphics.HCENTER);
-
-        String shadeStr = (world.polyRenderer.shadingMode == PolyRenderer3D.SHADE_VERTEX_PAINT)
-                ? "VERTEX PAINT"
-                : "FLAT SHADED";
-        String soundStr = (sound != null && sound.musicEnabled) ? "ON" : "OFF";
-
-        String[] items = {
-            "NEW / START MISSION",
-            "MAP: " + GameWorld.LEVEL_NAMES[selectedStartLevel],
-            "3D SHADING: " + shadeStr,
-            "AUDIO (MIDI+WAV): " + soundStr,
-            "KEYPAD CONTROLS",
-            "EXIT GAME"
-        };
-
-        int listY = boxY + 48;
+        int listY = boxY + 7;
         for (int i = 0; i < items.length; i++) {
             int iy = listY + i * 22;
             if (i == menuCursor) {
@@ -315,11 +320,23 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 g.fillRect(boxX + 8, iy - 2, boxW - 16, 19);
                 g.setColor(0xFFE066);
                 g.drawRect(boxX + 8, iy - 2, boxW - 17, 18);
+                g.drawString(items[i], scrW >> 1, iy, Graphics.TOP | Graphics.HCENTER);
             } else {
                 g.setColor(0xC8C4B4);
+                g.drawString(items[i], scrW >> 1, iy, Graphics.TOP | Graphics.HCENTER);
             }
-            g.drawString(items[i], scrW >> 1, iy, Graphics.TOP | Graphics.HCENTER);
         }
+
+        // Bottom HUD strip (STATUS2.CEL) with the menu hint
+        int stripY = scrH - hudH;
+        g.setColor(0x1C201C);
+        g.fillRect(0, stripY, scrW, hudH);
+        if (UiAssets.hud != null && UiAssets.hudW > 0 && UiAssets.hudW <= scrW) {
+            int hx = (scrW - UiAssets.hudW) >> 1;
+            g.drawRGB(UiAssets.hud, 0, UiAssets.hudW, hx, stripY, UiAssets.hudW, Math.min(UiAssets.hudH, hudH), true);
+        }
+        g.setColor(0xD8D0A0);
+        g.drawString("2/8 MOVE   5 SELECT", scrW >> 1, stripY + 10, Graphics.TOP | Graphics.HCENTER);
     }
 
     private void drawBriefingScreen(Graphics g) {
@@ -409,7 +426,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.setColor(0xFF7755);
         g.drawString("LIMBS:" + world.limbsSevered, rx, barY + 2, Graphics.TOP | Graphics.LEFT);
         g.setColor(0x98B890);
-        String modeTag = (world.polyRenderer.shadingMode == PolyRenderer3D.SHADE_VERTEX_PAINT) ? "VP" : "FL";
+        String modeTag = SHADE_TAGS[world.polyRenderer.shadingMode & 3];
         g.drawString(modeTag + " " + fpsDisplay + "FPS", rx, barY + 16, Graphics.TOP | Graphics.LEFT);
     }
 
@@ -480,9 +497,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.setColor(0xFFCC44);
         g.drawString("GAME PAUSED", scrW >> 1, boxY + 8, Graphics.TOP | Graphics.HCENTER);
 
-        String shadeStr = (world.polyRenderer.shadingMode == PolyRenderer3D.SHADE_VERTEX_PAINT)
-                ? "VERTEX PAINT"
-                : "FLAT SHADED";
+        String shadeStr = PolyRenderer3D.SHADE_NAMES[world.polyRenderer.shadingMode];
         String[] opts = {
             "RESUME MISSION",
             "SHADING: " + shadeStr,
@@ -513,34 +528,43 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.drawRect(4, 4, scrW - 9, scrH - 9);
 
         Font bold = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
+        Font plain = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN, Font.SIZE_SMALL);
         g.setFont(bold);
         g.setColor(0xFFCC44);
-        g.drawString("NOKIA S60 / SE CONTROLS", scrW >> 1, 14, Graphics.TOP | Graphics.HCENTER);
+        g.drawString("CONTROLS & HELP", scrW >> 1, 12, Graphics.TOP | Graphics.HCENTER);
 
-        String[] lines = {
-            "2 / UP    : MOVE FORWARD",
-            "8 / DOWN  : MOVE BACKWARD",
-            "4 / LEFT  : TURN LEFT",
-            "6 / RIGHT : TURN RIGHT",
-            "7 / 9     : STRAFE LEFT / RIGHT",
-            "5         : FIRE & DISMEMBER",
-            "1 / 3     : PREV / NEXT WEAPON",
-            "0         : JUMP",
-            "*         : USE / NEXT LEVEL",
-            "#         : LEVEL MAP (AUTOMAP)",
-            "*         : SHADING / NEXT MAP",
-            "SOFT KEYS : PAUSE MENU"
+        String[] keys = {
+            "2 / 8", "4 / 6", "1 / 3", "5", "7", "9", "* / #", "0", "SOFT"
         };
-
-        g.setColor(0xD0D8C8);
-        int y = 40;
-        for (int i = 0; i < lines.length; i++) {
-            g.drawString(lines[i], 16, y, Graphics.TOP | Graphics.LEFT);
-            y += 22;
+        String[] acts = {
+            "Forward / back",
+            "Turn left / right",
+            "Strafe left / right",
+            "Fire & dismember",
+            "Use / open / next level",
+            "Level map (toggle)",
+            "Previous / next weapon",
+            "Jump",
+            "Pause menu"
+        };
+        g.setFont(plain);
+        int y = 36;
+        for (int i = 0; i < keys.length; i++) {
+            g.setColor(0xFFE066);
+            g.drawString(keys[i], 14, y, Graphics.TOP | Graphics.LEFT);
+            g.setColor(0xD0D8C8);
+            g.drawString(acts[i], 78, y, Graphics.TOP | Graphics.LEFT);
+            y += 18;
         }
 
+        g.setColor(0x9A9A88);
+        g.drawString("TIP: aim at the enemy and fire;", 14, y + 8, Graphics.TOP | Graphics.LEFT);
+        g.drawString("sever arms & head for bonus kills.", 14, y + 24, Graphics.TOP | Graphics.LEFT);
+        g.drawString("Clear every enemy, then press 7.", 14, y + 40, Graphics.TOP | Graphics.LEFT);
+
+        g.setFont(bold);
         g.setColor(0xFFE066);
-        g.drawString("PRESS FIRE TO RETURN", scrW >> 1, scrH - 26, Graphics.TOP | Graphics.HCENTER);
+        g.drawString("PRESS ANY KEY TO RETURN", scrW >> 1, scrH - 24, Graphics.TOP | Graphics.HCENTER);
     }
 
     private void drawVictoryScreen(Graphics g) {
@@ -615,7 +639,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 pauseCursor = (pauseCursor + 1) % 6;
             } else if (keyCode == KEY_NUM5 || action == FIRE || keyCode == KEY_SOFT_LEFT1) {
                 handlePauseSelect();
-            } else if (keyCode == KEY_POUND || keyCode == KEY_SOFT_RIGHT1 || keyCode == KEY_SE_BACK) {
+            } else if (keyCode == KEY_NUM9 || keyCode == KEY_SOFT_RIGHT1 || keyCode == KEY_SE_BACK) {
                 screenState = SCREEN_PLAYING;
             }
             return;
@@ -634,14 +658,14 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             case KEY_NUM8: kDown = true; break;
             case KEY_NUM4: kLeft = true; break;
             case KEY_NUM6: kRight = true; break;
-            case KEY_NUM7: kStrafeL = true; break;
-            case KEY_NUM9: kStrafeR = true; break;
+            case KEY_NUM1: kStrafeL = true; break;
+            case KEY_NUM3: kStrafeR = true; break;
             case KEY_NUM5: kFire = true; break;
-            case KEY_NUM1: world.switchWeapon(-1); break;
-            case KEY_NUM3: world.switchWeapon(1); break;
+            case KEY_NUM7: world.interactOrNextLevel(); break;
+            case KEY_NUM9: showAutomap = !showAutomap; break;
             case KEY_NUM0: world.triggerJump(); break;
-            case KEY_POUND: showAutomap = !showAutomap; break;
-            case KEY_STAR: world.interactOrNextLevel(); break;
+            case KEY_STAR: world.switchWeapon(-1); break;
+            case KEY_POUND: world.switchWeapon(1); break;
             default:
                 if (action == UP) kUp = true;
                 else if (action == DOWN) kDown = true;
@@ -663,8 +687,8 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             case KEY_NUM8: kDown = false; break;
             case KEY_NUM4: kLeft = false; break;
             case KEY_NUM6: kRight = false; break;
-            case KEY_NUM7: kStrafeL = false; break;
-            case KEY_NUM9: kStrafeR = false; break;
+            case KEY_NUM1: kStrafeL = false; break;
+            case KEY_NUM3: kStrafeR = false; break;
             case KEY_NUM5: kFire = false; break;
             default:
                 if (action == UP) kUp = false;
@@ -694,10 +718,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 if (midlet != null) midlet.saveSettings();
                 break;
             case 2:
-                world.polyRenderer.shadingMode =
-                        (world.polyRenderer.shadingMode == PolyRenderer3D.SHADE_VERTEX_PAINT)
-                        ? PolyRenderer3D.SHADE_FLAT
-                        : PolyRenderer3D.SHADE_VERTEX_PAINT;
+                world.polyRenderer.cycleShadingMode();
                 if (midlet != null) midlet.saveSettings();
                 break;
             case 3:
@@ -724,10 +745,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 screenState = SCREEN_PLAYING;
                 break;
             case 1:
-                world.polyRenderer.shadingMode =
-                        (world.polyRenderer.shadingMode == PolyRenderer3D.SHADE_VERTEX_PAINT)
-                        ? PolyRenderer3D.SHADE_FLAT
-                        : PolyRenderer3D.SHADE_VERTEX_PAINT;
+                world.polyRenderer.cycleShadingMode();
                 break;
             case 2:
                 // Dismember next intact part on the lead monster so user can test dismemberment anytime

@@ -59,6 +59,12 @@ public final class SoundManager {
     private byte[][] sfxData;
     private Player musicPlayer;
     private Player activeSfxPlayer;
+    private final Player[] sfxPlayers = new Player[NUM_SFX];
+    private final boolean[] sfxFailed = new boolean[NUM_SFX];
+    private final Object sfxLock = new Object();
+    private int pendingSfx = -1;
+    private volatile boolean sfxRunning = false;
+    private Thread sfxThread;
     private int currentMusicTrack = -1;
     private long lastSfxTime = 0L;
 
@@ -156,18 +162,14 @@ public final class SoundManager {
         }
     }
 
-    private void closeActiveSfx() {
-        if (activeSfxPlayer != null) {
-            try { activeSfxPlayer.stop(); } catch (Exception e) {}
-            try { activeSfxPlayer.close(); } catch (Exception e) {}
-            activeSfxPlayer = null;
-        }
-    }
-
-    public synchronized void playSfxInstance(int sfxId) {
+    /**
+     * Non-blocking SFX request. The game thread only records the newest request and wakes the
+     * audio worker; createPlayer()/realize() never run on the frame path, which removes the
+     * shooting micro-stalls on S60 / SE devices.
+     */
+    public void playSfxInstance(int sfxId) {
         if (!sfxEnabled || sfxId < 0 || sfxId >= NUM_SFX) return;
-        byte[] raw = sfxData[sfxId];
-        if (raw == null) return;
+        if (sfxData[sfxId] == null) return;
 
         long now = System.currentTimeMillis();
         if (now - lastSfxTime < 90L && sfxId != SFX_RIFLE && sfxId != SFX_SHOTGUN && sfxId != SFX_ROCKET) {
@@ -175,18 +177,86 @@ public final class SoundManager {
         }
         lastSfxTime = now;
 
-        if (s60SafeAudio && musicPlayer != null) {
-            try { musicPlayer.stop(); } catch (Exception e) {}
+        synchronized (sfxLock) {
+            pendingSfx = sfxId;
+            sfxLock.notify();
         }
+        if (sfxThread == null) {
+            startSfxWorker();
+        }
+    }
 
-        closeActiveSfx();
+    private void startSfxWorker() {
+        sfxRunning = true;
+        sfxThread = new Thread(new Runnable() {
+            public void run() {
+                sfxWorkerLoop();
+            }
+        });
+        sfxThread.start();
+    }
+
+    private void sfxWorkerLoop() {
+        // Warm up every cached player once so the first shot of each type is not a decode stall.
+        for (int i = 0; i < NUM_SFX && sfxRunning; i++) {
+            ensureSfxPlayer(i);
+        }
+        while (sfxRunning) {
+            int id;
+            synchronized (sfxLock) {
+                while (pendingSfx < 0 && sfxRunning) {
+                    try {
+                        sfxLock.wait();
+                    } catch (InterruptedException ie) {
+                        // keep waiting
+                    }
+                }
+                id = pendingSfx;
+                pendingSfx = -1;
+            }
+            if (id >= 0 && sfxRunning) {
+                playSfxNow(id);
+            }
+        }
+    }
+
+    private Player ensureSfxPlayer(int id) {
+        if (sfxPlayers[id] != null || sfxFailed[id]) return sfxPlayers[id];
         try {
-            ByteArrayInputStream bais = new ByteArrayInputStream(raw);
-            activeSfxPlayer = Manager.createPlayer(bais, "audio/x-wav");
-            activeSfxPlayer.realize();
-            setPlayerVolume(activeSfxPlayer, 95);
-            activeSfxPlayer.start();
+            Player p = Manager.createPlayer(new ByteArrayInputStream(sfxData[id]), "audio/x-wav");
+            p.realize();
+            p.prefetch();
+            setPlayerVolume(p, 95);
+            sfxPlayers[id] = p;
         } catch (Exception e) {
+            sfxFailed[id] = true;
+            sfxPlayers[id] = null;
+        }
+        return sfxPlayers[id];
+    }
+
+    private void playSfxNow(int id) {
+        Player p = ensureSfxPlayer(id);
+        if (p == null) return;
+        try {
+            // One effect channel: silence the previous effect before starting this one.
+            if (activeSfxPlayer != null && activeSfxPlayer != p) {
+                activeSfxPlayer.stop();
+            }
+            p.stop();
+            p.setMediaTime(0L);
+            activeSfxPlayer = p;
+            p.start();
+        } catch (Exception e) {
+            sfxFailed[id] = true;
+            sfxPlayers[id] = null;
+            activeSfxPlayer = null;
+        }
+    }
+
+    private void closeActiveSfx() {
+        if (activeSfxPlayer != null) {
+            try { activeSfxPlayer.stop(); } catch (Exception e) {}
             activeSfxPlayer = null;
         }
     }
