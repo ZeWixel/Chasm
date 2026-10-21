@@ -75,6 +75,8 @@ A hit flashes the enemy with an additive red glow for a few ticks instead of ove
 
 ## Known limitations
 
+- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–4 in the game are therefore not the Episode 1 missions; they are the data that exists. The in-game names (`LEVEL_NAMES`, briefings) also do not match the compiled maps yet.
+
 - Doors are not compiled from the MAP data yet, so `7` only advances the level after the sector is cleared.
 - Some portal walls still show angle-dependent distortion; the root cause has not been isolated.
 - Transparent grate textures are drawn as opaque (no masked mid-texture pass yet).
