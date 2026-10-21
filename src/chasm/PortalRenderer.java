@@ -270,6 +270,13 @@ public class PortalRenderer {
             }
         }
 
+        // Clip against the horizontal view frustum (|X| <= Z, the 90-degree FOV the projection uses).
+        // A wall that crosses the near plane far to the side projects to tens of thousands of
+        // columns; the 32-bit projection then wraps and the texture smears across the screen.
+        if (!clipSegmentToFrustumSide(1) || !clipSegmentToFrustumSide(-1)) {
+            return false;
+        }
+
         // Project to screen space
         long startDepthReciprocal = PROJECTION_CONSTANT / (long)clippedWallStart.y >> 16;
         long endDepthReciprocal = PROJECTION_CONSTANT / (long)clippedWallEnd.y >> 16;
@@ -293,6 +300,45 @@ public class PortalRenderer {
         projectedCeilingEnd = (int)((long)relativeCeilingHeight * endDepthReciprocal >> 16);
         projectedFloorEnd = (int)((long)relativeFloorHeight * endDepthReciprocal >> 16);
 
+        return true;
+    }
+
+    /**
+     * Clips the clipped wall segment against one side of the view frustum, keeping the
+     * part where clipDist = Z + sign * X >= 0. Texture U is interpolated linearly with
+     * the same parameter, so the texture stays attached to the wall.
+     *
+     * @param sign +1 for the left frustum edge, -1 for the right edge
+     * @return false if the whole segment lies outside this edge
+     */
+    private static boolean clipSegmentToFrustumSide(int sign) {
+        long d0 = (long) clippedWallStart.y + (long) sign * clippedWallStart.x;
+        long d1 = (long) clippedWallEnd.y + (long) sign * clippedWallEnd.x;
+        if (d0 < 0 && d1 < 0) {
+            return false;
+        }
+        if (d0 >= 0 && d1 >= 0) {
+            return true;
+        }
+
+        // d0 and d1 have opposite signs here, so d0 - d1 is never zero.
+        long t = (d0 << 16) / (d0 - d1);
+        long dx = (long) clippedWallEnd.x - clippedWallStart.x;
+        long dz = (long) clippedWallEnd.y - clippedWallStart.y;
+        long du = (long) clippedTextureEndU - clippedTextureStartU;
+        int newX = (int) (clippedWallStart.x + (dx * t >> 16));
+        int newZ = (int) (clippedWallStart.y + (dz * t >> 16));
+        int newU = (int) (clippedTextureStartU + (du * t >> 16));
+
+        if (d0 < 0) {
+            clippedWallStart.x = newX;
+            clippedWallStart.y = newZ;
+            clippedTextureStartU = newU;
+        } else {
+            clippedWallEnd.x = newX;
+            clippedWallEnd.y = newZ;
+            clippedTextureEndU = newU;
+        }
         return true;
     }
 
