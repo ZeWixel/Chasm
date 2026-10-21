@@ -664,7 +664,12 @@ PROP_MODEL_SPECS = {
     30: ("BAREL1.3O", 1.1),   # Explosive barrel
     31: ("FARAON.3O", 0.85),  # Pharaoh statue
     32: ("OBELISK.3O", 0.55), # Obelisk / pillar
+    36: ("M-STAR.3O", 2.0),   # Moving platform: star (PROCESS 'move' on a model cell)
+    37: ("V2.3O", 2.0),       # Moving platform: V-shape (PROCESS 'move' on a model cell)
 }
+# Model files that PROCESS 'move'/'xmove'/'ymove' can carry (the object's cell is the move target).
+# Such objects are not static props: they are movers, driven by their proc (see mover records).
+MOVER_MODEL_IDS = {"FARAON.3O": 31, "M-STAR.3O": 36, "V2.3O": 37}
 # Renderer conversion for model vertices -> world units (PolyRenderer3D.MODEL_TO_WORLD_FP).
 MODEL_TO_WORLD_FP = 1792
 
@@ -728,6 +733,8 @@ def build_models_pack():
         ("GIB1.3O",     1.3),  # 33: Flying Gore Gib
         ("JDISK.3O",    1.2),  # 34: Saw-Disk Projectile
         ("SWORD.3O",    1.2),  # 35: Projectile / Rocket / Bolt
+        PROP_MODEL_SPECS[36],  # 36: Moving star platform
+        PROP_MODEL_SPECS[37],  # 37: Moving V platform
     ]
 
     all_models = []
@@ -820,13 +827,15 @@ def load_proc_defs(map_num):
     procs = {}
     for pid, p in parsed["procs"].items():
         h = p["header"]
-        cells, ups, unlocks = [], {}, []
+        cells, ups, unlocks, moves = [], {}, [], {}
         for name, args in p["actions"]:
             if name in ("move", "xmove", "ymove", "up") and len(args) >= 2 \
                     and isinstance(args[0], int) and isinstance(args[1], int):
                 cell = (args[0], args[1])
                 if cell not in cells:
                     cells.append(cell)
+                if name != "up" and len(args) >= 4 and isinstance(args[2], int) and isinstance(args[3], int):
+                    moves.setdefault(cell, (name, args[2], args[3]))
                 if name == "up" and len(args) >= 3:
                     ups[cell] = int(args[2])
             elif name == "unlock" and args:
@@ -841,6 +850,7 @@ def load_proc_defs(map_num):
         locked = bool(h.get("lock")) or key != 0
         procs[pid] = dict(
             cells=cells,
+            moves=moves,
             ups=ups,
             triggers=triggers,
             unlocks=unlocks,
@@ -860,6 +870,16 @@ def load_proc_defs(map_num):
         if text and 0 < mid < 256:
             messages[mid] = text[:80]
     return procs, messages
+
+
+def walls_off_of(gx, gy):
+    """Byte offset of the 11-byte wall/object record of cell (gx, gy) in MAP.XX."""
+    return 0x18001 + (gy + gx * 64) * 11
+
+
+def cell_xy_to_units_mover(fx, fy):
+    """Map position (cells, fractional) to world units, as the sidecar entities use."""
+    return int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE)
 
 
 def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
@@ -924,6 +944,34 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
                 c3d_ang = cand_ang
                 fwd_dx, fwd_dy = dx, dy
 
+    # Moving 3O models: a 'move' whose cell holds one of MOVER_MODEL_IDS (tid 163+ object).
+    # Each mover is a prop box driven by its proc (see updateMovers in GameWorld).
+    procs, proc_messages = load_proc_defs(map_num)
+    movers = []          # (proc id, model id, base x, base z, dX, dZ, half x, half z, angle), world units
+    mover_cells = set()
+    for pid in sorted(procs):
+        for (mx_cell, my_cell), (_name, mdx, mdy) in sorted(procs[pid]['moves'].items()):
+            if (mx_cell, my_cell) in mover_cells:
+                continue
+            if not (0 <= mx_cell < 64 and 0 <= my_cell < 64):
+                continue
+            w = mdata[walls_off_of(mx_cell, my_cell):walls_off_of(mx_cell, my_cell) + 11]
+            tid, _sz, unk, c00, c01, _c10, _c11 = struct.unpack("<3B4H", w)
+            if not (163 <= tid < 227):
+                continue
+            mfname = model_files.get(tid - 163, "")
+            mid = MOVER_MODEL_IDS.get(mfname)
+            if mid is None:
+                continue
+            mover_cells.add((mx_cell, my_cell))
+            bx, bz = cell_xy_to_units_mover(c00 / 256.0, c01 / 256.0)
+            hx, hz = prop_half_extent(*PROP_MODEL_SPECS[mid])
+            ddx = int(round(mdx * SCALE / 256.0))
+            ddz = int(round(mdy * SCALE / 256.0))
+            movers.append((pid, mid, bx, bz, ddx, ddz, hx, hz, unk & 7))
+    if movers:
+        print(f"[OK] MAP.{map_num:02d}: {len(movers)} moving platforms (procs {sorted({m[0] for m in movers})})")
+
     # Parse wall textures, items, and static 3O props/stairs from 0x18001
     cell_wall_tex = {}
     cell_floor_step = {}
@@ -948,6 +996,8 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
             elif 131 <= tid < 163:
                 raw_items.append((CHASM_TO_LOCAL_ITEM.get(tid - 131, 17), wx0, wy0))
             elif 163 <= tid < 227:
+                if (gx, gy) in mover_cells:
+                    continue   # drawn and moved by its proc (movers)
                 mfname = model_files.get(tid - 163, "")
                 cx, cy = max(0, min(63, int(wx0))), max(0, min(63, int(wy0)))
                 if any(s in mfname for s in ("STAI", "S_TAIR", "PYRST", "P_1S", "P_2S", "BOX~", "TABLE")):
@@ -992,17 +1042,19 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 
     # Doors: a PROCESS proc that moves cells owns those cells. Each door's cells get their
     # own sectors (never merged with neighbours), so the ceiling can move independently.
-    procs, proc_messages = load_proc_defs(map_num)
+    for pid in sorted(procs):
+        procs[pid]['cells'] = [c for c in procs[pid]['cells'] if c not in mover_cells]
     door_of_cell = {}
     for pid in sorted(procs):
         for c in procs[pid]['cells']:
             if c in visited and c not in door_of_cell:
                 door_of_cell[c] = pid
     door_records = []
+    mover_pids = {m[0] for m in movers}
     for pid in sorted(procs):
         p = procs[pid]
         my_cells = sorted({c for c in p['cells'] if door_of_cell.get(c) == pid})
-        if my_cells or p['triggers'] or p['unlocks']:
+        if my_cells or p['triggers'] or p['unlocks'] or pid in mover_pids:
             door_records.append((pid, p, my_cells))
 
     def cell_key(c):
@@ -1247,6 +1299,8 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     #     >B unlock count, then >B proc ids
     #     >B cell count, then >BBHH per cell: x, y, sectorId, openCeil (up cells: floor + H)
     #   >B message count, then per message: >BB id, length, ASCII bytes
+    #   >B mover count, then >BBhhhhhhB per mover: proc id, model id, base x, base z, dX, dZ
+    #     (total travel in world units), half x, half z, angle. Movers are prop boxes (see GameWorld).
     proc_buf = bytearray()
     proc_buf.extend(struct.pack(">H", len(door_records)))
     for pid, p, my_cells in door_records:
@@ -1274,6 +1328,11 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     for m in used_msgs:
         text = proc_messages.get(m, "")[:80].encode("ascii", errors="replace")
         proc_buf.extend(struct.pack(">BB", m, len(text)) + text)
+    # Movers: >B count, then >BBhhhhhhB per mover: proc id, model id, base x, base z (world units),
+    # dX, dZ (total travel at the end of the proc, world units), half x, half z, angle (0..7).
+    proc_buf.extend(struct.pack(">B", len(movers)))
+    for pid, mid, bx, bz, ddx, ddz, hx, hz, ang in movers:
+        proc_buf.extend(struct.pack(">BBhhhhhhB", pid & 0xFF, mid, bx, bz, ddx, ddz, hx, hz, ang))
     with open(os.path.join(LEVELS_DIR, f"procs{level_idx}.bin"), "wb") as f:
         f.write(proc_buf)
 
@@ -1284,11 +1343,345 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
           f"c3b={info['total_size']}B")
 
 
+# ---------------------------------------------------------------------------
+# 5b. First-build levels: grid maps (tools/legacy/map1..4.bin, from commit b8d28e9) -> C3B
+# ---------------------------------------------------------------------------
+# Those maps are 64x64 grids in the first build's own format (see write_map_bin there):
+#   >HHBBB spawn x*256, spawn y*256, angle (0..7), exit cell x, y
+#   4096 x cell_type (0 open, 1 wall, 2 door, 3 window, 4 exit)
+#   4096 x >hhh floor, ceiling, wall height (units)
+#   floor_tex, ceil_tex (62 = sky), wall_tex, step_tex, light (4096 bytes each)
+#   >H count, then >BHHB monsters, >H count, then >BHH items, >H count, then >BHHB props
+# Levels 1-3 of that build are the MAP.01/05/06 layouts with steps and walls added by hand
+# (add_engineered_steps_and_walls). Level 4 was drawn by hand (build_level4_sanctum). None of
+# this is game data; it is kept to play the first build's levels in this version.
+LEGACY_DIR = os.path.join(ROOT_DIR, "tools", "legacy")
+# (level index in the game, legacy map number, source MAP for textures, or None for a fixed list)
+LEGACY_LEVELS = [
+    (4, 1, 1),
+    (5, 2, 5),
+    (6, 3, 6),
+    (7, 4, None),
+]
+# Wall texture names of the first build's level 4 (build_level4_sanctum in b8d28e9).
+SANCTUM_WALL_NAMES = [
+    "ALIENB01", "ALIENG01", "ALIENG02", "BLWALL01", "BLWALL02", "BLWALL03",
+    "BRED02", "BRED03", "BRED04", "DMET01", "DMET02", "F_BORD01",
+    "GATE01", "GATE02", "GBLOCK1", "GBLOCK2", "P_BAM64", "P_FR56",
+    "P_STFR", "BRICKW1", "BRICKW2", "FENCE01", "BOX01", "BOX02",
+]
+
+
+def parse_legacy_map(data):
+    """Reads a first-build grid map (layout above). Raises if the file is not fully consumed."""
+    o = 0
+    sx, sy, sang, ex, ey = struct.unpack_from(">HHBBB", data, o)
+    o += 7
+    cell_type = bytearray(data[o:o + 4096])
+    o += 4096
+    heights = []
+    for _ in range(4096):
+        heights.append(struct.unpack_from(">hhh", data, o))
+        o += 6
+    tex = {}
+    for name in ("floor_tex", "ceil_tex", "wall_tex", "step_tex", "light"):
+        tex[name] = bytearray(data[o:o + 4096])
+        o += 4096
+    counts = []
+    for rec in (">BHHB", ">BHH", ">BHHB"):
+        n, = struct.unpack_from(">H", data, o)
+        o += 2
+        size = struct.calcsize(rec)
+        items = [struct.unpack_from(rec, data, o + k * size) for k in range(n)]
+        o += n * size
+        counts.append(items)
+    if o != len(data):
+        raise ValueError(f"legacy map: {len(data) - o} bytes left over")
+    return dict(spawn=(sx / 256.0, sy / 256.0, sang), exit=(ex, ey), cell_type=cell_type,
+                floor_h=[h[0] for h in heights], ceil_h=[h[1] for h in heights],
+                wall_h=[h[2] for h in heights], monsters=counts[0], items=counts[1],
+                props=counts[2], **tex)
+
+
+def parse_gfx_names(rdata):
+    """#GFX table of RESOURCE.XX: texture id -> name."""
+    gfx = {}
+    i0 = rdata.find("#GFX")
+    i1 = rdata.find("#end", i0)
+    for line in rdata[i0 + 4:i1].splitlines():
+        line = line.strip()
+        if ":" in line:
+            key, val = line.split(":", 1)
+            parts = val.strip().split()
+            if key.strip().isdigit() and parts:
+                gfx[int(key)] = parts[0]
+    return gfx
+
+
+def legacy_texture_lists(map_num):
+    """Replicates the first build's texture remap for one source map.
+
+    Its wall_remap was the 24 most used wall ids (ties keep scan order, x then y), and its
+    floor_remap the 12 most used floor ids (floor counts 2, ceiling counts 1). So legacy wall
+    index i is the i-th of those ids, and legacy floor index f the f-th.
+    """
+    mdata = csm.read(f"MAP.{map_num:02d}")
+    gfx = parse_gfx_names(csm.read(f"RESOURCE.{map_num:02d}").decode("ascii", errors="ignore"))
+    floor_in = mdata[0x24001:0x25001]
+    ceil_in = mdata[0x23001:0x24001]
+    wall_usage = {}
+    floor_usage = {}
+    for x in range(64):
+        for y in range(64):
+            fid = floor_in[x * 64 + y]
+            cid = ceil_in[x * 64 + y]
+            if fid < 62:
+                floor_usage[fid] = floor_usage.get(fid, 0) + 2
+            if cid < 62:
+                floor_usage[cid] = floor_usage.get(cid, 0) + 1
+            tid = mdata[0x18001 + (y + x * 64) * 11]
+            if 0 < tid < 128 and tid in gfx:
+                wall_usage[tid] = wall_usage.get(tid, 0) + 1
+    top_walls = [t for t, _ in sorted(wall_usage.items(), key=lambda kv: kv[1], reverse=True)[:24]]
+    while len(top_walls) < 24:
+        top_walls.append(top_walls[0] if top_walls else 1)
+    top_floors = [f for f, _ in sorted(floor_usage.items(), key=lambda kv: kv[1], reverse=True)[:12]]
+    while len(top_floors) < 12:
+        top_floors.append(top_floors[0] if top_floors else 0)
+    return [gfx.get(t, "") for t in top_walls], top_floors
+
+
+def write_material_set(level_idx, wall_names, floor_fids, floors_blob, label):
+    """Writes L<n>/materials.c3m: wall slot i+1 = wall_names[i], flat slot f+1 = floor_fids[f]."""
+    out_dir = os.path.join(TEX_CUSTOM_DIR, f"L{level_idx}")
+    os.makedirs(out_dir, exist_ok=True)
+    zf, index = load_tex_zip_index()
+    manifest = [f"# First-build materials for level {level_idx} ({label})"]
+    for i, name in enumerate(wall_names):
+        rgb = None
+        if name:
+            try:
+                rgb = wall_rgb64(name, zf, index)
+            except KeyError:
+                print(f"[WARN] L{level_idx} wall {name} not found; uses a grey wall")
+        if rgb is None:
+            rgb = [[(96, 96, 104)] * 64 for _ in range(64)]
+        manifest.append(f"wall.{i + 1}={shared_tex(rgb)}")
+    zf.close()
+    for f, fid in enumerate(floor_fids):
+        manifest.append(f"flat.{f + 1}={shared_tex(flat_rgb64(floors_blob, fid))}")
+    manifest.append(f"sky={shared_tex(build_sky_rows())}")
+    with open(os.path.join(out_dir, "materials.c3m"), "w", encoding="utf-8") as f:
+        f.write("\n".join(manifest) + "\n")
+
+
+def compile_legacy_level(level_idx, legacy_no, wall_names, floor_fids, floors_blob, label):
+    d = parse_legacy_map(open(os.path.join(LEGACY_DIR, f"map{legacy_no}.bin"), "rb").read())
+    write_material_set(level_idx, wall_names, floor_fids, floors_blob, label)
+
+    ct = d["cell_type"]
+    walk_cell = lambda x, y: 0 <= x < 64 and 0 <= y < 64 and ct[x + y * 64] in (0, 2, 4)
+
+    def cell_i(x, y):
+        return x + y * 64
+
+    def key(x, y):
+        i = cell_i(x, y)
+        return (d["floor_h"][i], d["ceil_h"][i], d["floor_tex"][i], d["ceil_tex"][i])
+
+    # Greedy rectangles of equal key (max 7 cells a side), as in compile_chasm_map_to_c3b.
+    unassigned = set((x, y) for x in range(64) for y in range(64) if walk_cell(x, y))
+    rects = []
+    cell_to_rect = {}
+    for (x0, y0) in sorted(unassigned, key=lambda p: (p[1], p[0])):
+        if (x0, y0) not in unassigned:
+            continue
+        k0 = key(x0, y0)
+        x1 = x0 + 1
+        while (x1, y0) in unassigned and key(x1, y0) == k0 and (x1 - x0) < 7:
+            x1 += 1
+        y1 = y0 + 1
+        while (y1 - y0) < 7:
+            if all((tx, y1) in unassigned and key(tx, y1) == k0 for tx in range(x0, x1)):
+                y1 += 1
+            else:
+                break
+        sid = len(rects)
+        for ty in range(y0, y1):
+            for tx in range(x0, x1):
+                unassigned.discard((tx, ty))
+                cell_to_rect[(tx, ty)] = sid
+        rects.append((x0, y0, x1, y1))
+
+    def to_xz(gx, gy):
+        return ((gx - 32) * SCALE, (gy - 32) * SCALE)
+
+    vert_map, vertices = {}, []
+
+    def get_v(gx, gy):
+        pt = to_xz(gx, gy)
+        if pt not in vert_map:
+            vert_map[pt] = len(vertices)
+            vertices.append(pt)
+        return vert_map[pt]
+
+    def flat_slot(v):
+        return v + 1
+
+    def wall_slot(v):
+        return v + 1
+
+    sectors = []
+    for sid, (x0, y0, x1, y1) in enumerate(rects):
+        i = cell_i(x0, y0)
+        sky = d["ceil_tex"][i] == 62
+        light = max(4, min(15, d["light"][i]))
+        sectors.append(dict(floor=d["floor_h"][i], ceil=d["ceil_h"][i],
+                            ceil_tex=51 if sky else flat_slot(d["ceil_tex"][i]),
+                            floor_tex=flat_slot(d["floor_tex"][i]),
+                            light_packed=light << 4, tag=0, type=0))
+    surfaces, walls = [], []
+
+    def add_surface(sec_id, tex_id):
+        surfaces.append(dict(ox=0, oy=0, upper=tex_id, lower=tex_id, main=tex_id, sector=sec_id))
+        return len(surfaces) - 1
+
+    def wall_tex_at(x, y):
+        if 0 <= x < 64 and 0 <= y < 64:
+            return wall_slot(d["wall_tex"][cell_i(x, y)])
+        return wall_slot(0)
+
+    for sid, (x0, y0, x1, y1) in enumerate(rects):
+        # Unit edges, clockwise like the other compiler: (start, end, inner cell, outer cell).
+        edges = []   # (side, start, end, inner cell, outer cell)
+        for y in range(y0, y1):
+            edges.append((0, (x0, y), (x0, y + 1), (x0, y), (x0 - 1, y)))
+        for x in range(x0, x1):
+            edges.append((1, (x, y1), (x + 1, y1), (x, y1 - 1), (x, y1)))
+        for y in range(y1 - 1, y0 - 1, -1):
+            edges.append((2, (x1, y + 1), (x1, y), (x1 - 1, y), (x1, y)))
+        for x in range(x1 - 1, x0 - 1, -1):
+            edges.append((3, (x + 1, y0), (x, y0), (x, y0), (x, y0 - 1)))
+        runs = []
+        for side, start, end, inner, outer in edges:
+            nb = cell_to_rect.get(outer, -1)
+            if nb >= 0 and nb < sid:
+                continue   # the wall is emitted by the lower-numbered sector
+            front = wall_tex_at(inner[0], inner[1])
+            back = wall_tex_at(outer[0], outer[1]) if nb >= 0 else front
+            tag = (side, nb, front, back)
+            # Runs stay on one side of the rectangle, so a closed loop never merges into one wall.
+            if runs and runs[-1][2] == tag and runs[-1][1] == start:
+                runs[-1][1] = end
+            else:
+                runs.append([start, end, tag, outer])
+        for start, end, (side, nb, front, back), outer in runs:
+            sv, ev = get_v(*start), get_v(*end)
+            sf = add_surface(sid, front)
+            if nb < 0:
+                walls.append(dict(sv=sv, ev=ev, flags=1, type=0, special=0, front=sf, back=-1))
+            else:
+                sb = add_surface(nb, back)
+                walls.append(dict(sv=sv, ev=ev, flags=4, type=0, special=0, front=sf, back=sb))
+
+    lvl = c3d2_core.LEGACY.Level()
+    lvl.vertices = vertices
+    lvl.walls = walls
+    lvl.surfaces = surfaces
+    lvl.sectors = sectors
+
+    sfx, sfy, sang = d["spawn"]
+    spawn_cell = (int(sfx), int(sfy))
+    if not walk_cell(*spawn_cell):
+        raise ValueError(f"legacy map{legacy_no}: spawn cell {spawn_cell} is not walkable")
+    px_c3d = int((sfx - 32.0) * SCALE)
+    pz_c3d = int((sfy - 32.0) * SCALE)
+    c3d_ang = (sang & 7) * 512
+    lvl.objects = [dict(x=px_c3d, z=pz_c3d, angle=c3d_ang, type=1, param=0)]
+    report = c3d2_core.LEGACY.rebuild_derived(lvl, validate=True)
+    out_c3b = os.path.join(LEVELS_DIR, f"level{level_idx}.c3b")
+    c3d2_core.dump_c3b(lvl, f"/textures/custom/L{level_idx}/materials.c3m", out_c3b, None)
+
+    def cell_xy_to_units(fx, fy):
+        return int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE)
+
+    monsters = []
+    for mtype, mx, my, mang in d["monsters"]:
+        if mtype > 10:
+            continue
+        cx_u, cz_u = cell_xy_to_units(mx / 256.0, my / 256.0)
+        monsters.append((mtype, cx_u, cz_u, mang & 7))
+    if len(monsters) > 32:
+        print(f"[WARN] L{level_idx}: {len(monsters)} monsters, runtime keeps 32")
+    monsters = monsters[:32]
+
+    items = []
+    for itype, ix, iy in d["items"]:
+        if itype > 12:
+            continue
+        ux, uz = cell_xy_to_units(ix / 256.0, iy / 256.0)
+        items.append((17 + itype, ux, uz))   # first-build item 0..12 is model 17..29
+    if len(items) > 40:
+        print(f"[WARN] L{level_idx}: {len(items)} items, runtime keeps 40")
+    items = items[:40]
+
+    props = []
+    for ptype, px, py, pang in d["props"]:
+        if ptype not in PROP_MODEL_SPECS:
+            continue
+        ux, uz = cell_xy_to_units(px / 256.0, py / 256.0)
+        hx, hz = prop_half_extent(*PROP_MODEL_SPECS[ptype])
+        props.append((ptype, ux, uz, pang & 7, hx, hz))
+    if len(props) > 24:
+        print(f"[WARN] L{level_idx}: {len(props)} props, runtime keeps 24")
+    props = props[:24]
+
+    ex, ey = d["exit"]
+    exit_x, exit_z = cell_xy_to_units(ex + 0.5, ey + 0.5)
+
+    ent = bytearray()
+    ent.extend(struct.pack(">hhhhh", px_c3d, pz_c3d, c3d_ang, exit_x, exit_z))
+    ent.extend(struct.pack(">H", len(monsters)))
+    for mtype, mx, mz, mang in monsters:
+        ent.extend(struct.pack(">BhhB", mtype, mx, mz, mang))
+    ent.extend(struct.pack(">H", len(items)))
+    for itype, ix, iz in items:
+        ent.extend(struct.pack(">Bhh", itype, ix, iz))
+    ent.extend(struct.pack(">H", len(props)))
+    for ptype, px_p, pz_p, pang, hx, hz in props:
+        ent.extend(struct.pack(">BhhBhh", ptype, px_p, pz_p, pang, hx, hz))
+    with open(os.path.join(LEVELS_DIR, f"entities{level_idx}.bin"), "wb") as f:
+        f.write(ent)
+    # No PROCESS script in the first build: an empty proc sidecar.
+    with open(os.path.join(LEVELS_DIR, f"procs{level_idx}.bin"), "wb") as f:
+        f.write(struct.pack(">HBB", 0, 0, 0))   # no procs, no messages, no movers
+
+    info = c3d2_core.read_c3b(out_c3b)
+    print(f"[OK] Level {level_idx} (first build map{legacy_no}): sectors={info['sectors']}, "
+          f"walls={info['walls']}, nodes={info['nodes']}, bsp_err={len(report.fail_samples)}, "
+          f"monsters={len(monsters)}, items={len(items)}, props={len(props)}, c3b={info['total_size']}B")
+
+
+def build_legacy_levels():
+    for level_idx, legacy_no, source_map in LEGACY_LEVELS:
+        if source_map is None:
+            wall_names = SANCTUM_WALL_NAMES
+            floor_fids = list(range(12))
+            floors_blob = csm.read("FLOORS.06")
+            label = "first build level 4, fixed texture list"
+        else:
+            wall_names, floor_fids = legacy_texture_lists(source_map)
+            floors_blob = csm.read(f"FLOORS.{source_map:02d}")
+            label = f"first build level {legacy_no}, textures of MAP.{source_map:02d}"
+        compile_legacy_level(level_idx, legacy_no, wall_names, floor_fids, floors_blob, label)
+
+
 def build_all_levels():
     compile_chasm_map_to_c3b(1, 1, max_cells=2000)
     compile_chasm_map_to_c3b(2, 5, max_cells=2000)
     compile_chasm_map_to_c3b(3, 6, max_cells=2000)
-    # MAP.99 is the briefing background (not playable), so only three playable maps are built.
+    # MAP.99 is the briefing background (not playable). Levels 4-7 are the first build's grid maps.
+    build_legacy_levels()
 
 
 # ---------------------------------------------------------------------------

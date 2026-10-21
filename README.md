@@ -6,7 +6,7 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 
 1. **C3D2/C3B BSP-Portal World Renderer (`PortalRenderer`)**:
    - Adapted from `CovertOps3D-RE`'s BSP-portal engine (`PortalRenderer`, `CustomLevelLoader`, `CustomMaterialSet`, `BSPNode`, `Sector`, `WallDefinition`, `RenderUtils`).
-  - Compiles the playable Chasm levels from `CSM.BIN` (`MAP.01` → level 1 "Power Station", `MAP.05` → level 2 "Around Pyramids", `MAP.06` → level 3 "Pyramid of Shmuher") into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level3.c3b`) with `0` BSP partition mismatches. `MAP.99` is the briefing background and is not built.
+  - Compiles the playable levels into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level7.c3b`) with `0` BSP partition mismatches. Levels 1–3 come from `CSM.BIN` (`MAP.01` → "Power Station", `MAP.05` → "Around Pyramids", `MAP.06` → "Pyramid of Shmuher"). Levels 4–7 are the first build's grid levels, which are not game data (see Levels). `MAP.99` is the briefing background and is not built.
    - Textures follow each map's own IDs: a wall tile ID is looked up in the map's `#GFX` table in `RESOURCE.XX` (e.g. `19` → `sewer01.cel`) and the matching PNG from `tex.zip` is used, or the original `.CEL` from `CSM.BIN` when no PNG exists. Floor and ceiling values index the 64 tiles of `FLOORS.XX`. Each level has its own `/res/textures/custom/L<n>/materials.c3m`; the BMP4 textures themselves are shared under `/res/textures/custom/shared/`. Textures are 16-colour 4-bit `BMP4`; tall 64×128 walls are squashed to 64×64.
 
 2. **Software 3D Polygon Renderer Without a Z-Buffer (`PolyRenderer3D`)**:
@@ -89,9 +89,18 @@ There is no use key. Doors, gates, switches and the exit work on touch, as in th
 - **Keys** are items 27 (red), 28 (green) and 29 (blue). The HUD shows the green and red keys in the top-right corner of the 3D view. The blue key is collected but has no HUD slot yet.
 - **Exit**: when every enemy is down, walking to the level's exit point completes the level. Nothing else needs to be pressed.
 
-Not implemented: `destroy` links (shooting an object to open a proc, for example `MAP.01` proc 1 at (22,55), so that door stays shut), `shoot` links, moving 3O models (`move` on a model cell, the lifts of the original), `rotate`, `light`, `playani`, `waitout`, `death`. These are parsed and ignored.
+- **Moving platforms** (`move`, `xmove`, `ymove` on a cell that holds a 3O model, for example `MAP.06` procs 2, 3 and 16). Their model is not a static prop: it is a prop box that the proc moves (see below).
 
-Each level compiles its whole walkable area, so levels 1–3 have 156, 92 and 254 sectors.
+Not implemented: `destroy` links (shooting an object to open a proc, for example `MAP.01` proc 1 at (22,55), so that door stays shut), `shoot` links, `rotate`, `light`, `playani`, `waitout`, `death`, and vertical lifts. In the `CSM.BIN` data, the `up` action only raises fence and frame walls; no lift platform uses it. These are parsed and ignored.
+
+### Moving platforms
+
+- **Build:** `tools/build_assets.py` finds each `move`/`xmove`/`ymove` whose cell holds a model in `MOVER_MODEL_IDS` (`M-STAR.3O`, `V2.3O`, `FARAON.3O`). Each one becomes a mover record in `res/levels/procs{N}.bin` (proc id, model id, base position, total travel dX/dZ in world units, collision half-extents, angle). The move amounts are the proc's own arguments, scaled by 96/256 (the cell is 256 map units). `M-STAR.3O` and `V2.3O` are added to `models.bin` as models 36 and 37. The model's position comes from its object record and is not snapped to the cell.
+- **Runtime:** a mover is a prop slot whose box follows its proc's stage each tick. The proc uses the original's time scale (stage = seconds × speed / 10, so a full move takes 10 / speed seconds). A mover proc starts on the same touch triggers as doors.
+- **Blocking and pushing:** the box blocks the player and monsters like a static prop. When the box moves onto the player or a live monster, that entity is shoved to the box's leading face. The shove is skipped if the target point has no sector, and the box pushout then acts instead.
+- **Deviation:** nothing rides the platform. The original's `GetFloorLevel` ignores dynamic models, so the player is not carried by a platform; the platform only blocks and pushes.
+
+Each level compiles its whole walkable area, so levels 1–7 have 156, 92, 254, 245, 357, 417 and 39 sectors.
 
 ## Levels
 
@@ -103,13 +112,28 @@ The `CSM.BIN` used by this build has four maps: `MAP.01`, `MAP.05`, `MAP.06` and
 | 2 | MAP.05 | Around Pyramids |
 | 3 | MAP.06 | Pyramid of Shmuher |
 
-The first build (`b8d28e9`) had four levels in `res/map1..map4.bin`. Levels 1–3 there came from the same maps, but with steps and walls that were added by hand (`add_engineered_steps_and_walls`), and level 4 was a hand-made layout (`build_level4_sanctum`, "Time Chasm Sanctum"), not game data. They are not in this build yet.
+Levels 4–7 come from the first build (`b8d28e9`, PR #1), which had four levels in `res/map1..map4.bin`. Those files use a 64×64 grid format written by that build's `write_map_bin`. They are kept in `tools/legacy/map1..4.bin`, byte-identical to `res/map1..4.bin` in commit `b8d28e9`, and compiled by `tools/build_assets.py` (`build_legacy_levels`):
+
+| Level | First-build file | What it is |
+|---|---|---|
+| 4 | `map1.bin` | Power Station, from `MAP.01`, with hand-added steps and walls (`add_engineered_steps_and_walls`). Not game data. |
+| 5 | `map2.bin` | Around Pyramids, from `MAP.05`, with hand-added steps and walls. Not game data. |
+| 6 | `map3.bin` | Pyramid of Shmuher, from `MAP.06`, with hand-added steps and walls. Not game data. |
+| 7 | `map4.bin` | Time Chasm Sanctum, hand-drawn in `build_level4_sanctum`. Not game data. |
+
+Notes on levels 4–7:
+- Their cell types are open (0), wall (1), door (2, walkable, as in the first build, with no door process), window (3, solid) and exit (4). The sanctum's sliding gate (cell 32,29) is a door cell and therefore walkable.
+- Their wall and floor textures come from the first build's texture rules, mapped to this build's texture files. This is an approximation: the first build's own texture indices have no source in this repo. Level 7 uses the first build's sanctum wall list; two names (`P_BAM64`, `P_STFR`) are missing, so those walls are grey.
+- Their proc sidecars are empty, as in the first build.
+- Level 5 has 36 monsters and 32 props, and level 6 has 36 monsters. The runtime keeps 32 monsters and 24 props, so the first ones in the file are kept.
+- Music: level index `i` plays track `(i mod 4) + 1` (`mus_lvl1..4.mid`), so levels 4–7 reuse the four level tracks.
 
 ## Known limitations
 
-- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels here. Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
+- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels from the data, plus four first-build levels (4–7) that are not game data. Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
 
-- Only links (proximity, floor, toggle, return), `unlock` chains, doors and gates (`up`) are executed from `PROCESS.XX`. Shot-to-open (`destroy`, `shoot`), moving 3O platforms, rotating parts, lights and animations are not.
+- Only links (proximity, floor, toggle, return), `unlock` chains, doors, gates (`up`) and moving platforms are executed from `PROCESS.XX`. Shot-to-open (`destroy`, `shoot`), rotating parts, lights and animations are not.
+- Levels 4–7 are the first build's hand-made or hand-edited layouts, not Chasm's levels. Their textures are approximate (see Levels).
 - The full-area geometry has not been measured on a device. Frame rate and memory with 150–230 sectors are unknown.
 - Some portal walls still show angle-dependent distortion; the root cause has not been isolated.
 - Transparent grate textures are drawn as opaque (no masked mid-texture pass yet).

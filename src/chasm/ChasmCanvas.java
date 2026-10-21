@@ -40,7 +40,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private int menuCursor = 0;
     private int pauseCursor = 0;
     private static final int PAUSE_ITEMS = 8;
-    private int selectedStartLevel = 0; // 0..3
+    private int selectedStartLevel = 0; // 0..GameWorld.NUM_LEVELS-1
     private boolean showAutomap = false;
 
     private int scrW = 240;
@@ -195,7 +195,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 world.loadLevel(selectedStartLevel);
                 if (midlet != null) midlet.saveSettings();
                 screenState = SCREEN_BRIEFING;
-                if (sound != null) sound.playMusic(selectedStartLevel + 1);
+                if (sound != null) sound.playMusic(GameWorld.musicTrackFor(selectedStartLevel));
             } else {
                 screenState = SCREEN_VICTORY;
                 if (sound != null) sound.playMusic(0);
@@ -910,7 +910,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 world.resetInventory();
                 world.loadLevel(selectedStartLevel);
                 screenState = SCREEN_BRIEFING;
-                if (sound != null) sound.playMusic(selectedStartLevel + 1);
+                if (sound != null) sound.playMusic(GameWorld.musicTrackFor(selectedStartLevel));
                 break;
             case 1:
                 selectedStartLevel = (selectedStartLevel + 1) % GameWorld.NUM_LEVELS;

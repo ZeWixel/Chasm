@@ -36,14 +36,24 @@ public final class GameWorld {
     private final Point2D collisionTestPoint = new Point2D(0, 0);
 
     // ==================== Chasm Gameplay Constants ====================
-    // Playable levels with data present in the CSM.BIN used by this build.
-    // MAP.99 is the briefing background, not a playable mission, so it is not included.
-    public static final int NUM_LEVELS = 3;
+    // Levels 1-3: MAP.01, MAP.05, MAP.06 of the CSM.BIN used by this build (MAP.99 is the briefing
+    // background, not a mission). Levels 4-7: the first build's four grid levels (tools/legacy),
+    // with the steps and walls that were added by hand there. They are not game data.
+    public static final int NUM_LEVELS = 7;
     public static final String[] LEVEL_NAMES = {
         "THE POWER STATION",
         "AROUND PYRAMIDS",
-        "PYRAMID OF SHMUHER"
+        "PYRAMID OF SHMUHER",
+        "FIRST BUILD: POWER STATION",
+        "FIRST BUILD: AROUND PYRAMIDS",
+        "FIRST BUILD: PYRAMID OF SHMUHER",
+        "FIRST BUILD: TIME CHASM SANCTUM"
     };
+
+    /** Music track (SoundManager: 1..4 = mus_lvl1..4) for a 0-based level index. */
+    public static int musicTrackFor(int levelIndex) {
+        return (levelIndex % 4) + 1;
+    }
 
     public static final String[][] LEVEL_BRIEFINGS = {
         {
@@ -63,6 +73,30 @@ public final class GameWorld {
             "Deep inside the pyramid the",
             "distortion is strongest. Clear",
             "the chambers and move on."
+        },
+        {
+            "FIRST BUILD 1: POWER STATION",
+            "Layout of the first build with",
+            "hand-made steps and walls (not",
+            "game data). Reach the exit."
+        },
+        {
+            "FIRST BUILD 2: AROUND PYRAMIDS",
+            "Layout of the first build with",
+            "hand-made steps and walls (not",
+            "game data). Reach the exit."
+        },
+        {
+            "FIRST BUILD 3: PYRAMID OF SHMUHER",
+            "Layout of the first build with",
+            "hand-made steps and walls (not",
+            "game data). Reach the exit."
+        },
+        {
+            "FIRST BUILD 4: TIME CHASM SANCTUM",
+            "Hand-drawn sanctum of the first",
+            "build (not game data). Find the",
+            "way to the exit portal."
         }
     };
 
@@ -386,6 +420,8 @@ public final class GameWorld {
 
     public int procCount = 0;
     private final int[] procId = new int[MAX_PROCS];
+    /** True for a proc that moves a 3O platform (its stage drives the platform, see updateMovers). */
+    private final boolean[] procMoves = new boolean[MAX_PROCS];
     private final int[] procKey = new int[MAX_PROCS];       // 0 none, 1 green, 2 red, 3 blue
     private final int[] procFlags = new int[MAX_PROCS];
     private final int[] procDelay = new int[MAX_PROCS];     // ticks before opening
@@ -401,6 +437,24 @@ public final class GameWorld {
     private final int[][] procUnlock = new int[MAX_PROCS][];
     private final int[][] procCell = new int[MAX_PROCS][];     // x, y, sectorId, openCeil quads
     private final String[] procMsg = new String[256];
+
+    // Moving platforms: 3O models whose prop box follows the stage of their proc (PROCESS 'move').
+    // A mover occupies a prop slot after the static props; propMovProc is -1 for static props.
+    private final int[] propMovProc = new int[MAX_PROPS];
+    private final int[] propBaseX = new int[MAX_PROPS];     // world units, stage 0
+    private final int[] propBaseZ = new int[MAX_PROPS];
+    private final int[] propMoveDX = new int[MAX_PROPS];    // world units, total travel at stage 256
+    private final int[] propMoveDZ = new int[MAX_PROPS];
+    private int movCount = 0;
+    private final int[] movPid = new int[MAX_PROPS];
+    private final int[] movModel = new int[MAX_PROPS];
+    private final int[] movBX = new int[MAX_PROPS];
+    private final int[] movBZ = new int[MAX_PROPS];
+    private final int[] movDX = new int[MAX_PROPS];
+    private final int[] movDZ = new int[MAX_PROPS];
+    private final int[] movHX = new int[MAX_PROPS];
+    private final int[] movHZ = new int[MAX_PROPS];
+    private final int[] movAng = new int[MAX_PROPS];
     public boolean hasGreenKey = false;
     public boolean hasRedKey = false;
     public boolean hasBlueKey = false;
@@ -410,7 +464,9 @@ public final class GameWorld {
 
     private void loadProcsSidecar(String path) {
         procCount = 0;
+        movCount = 0;
         for (int i = 0; i < procMsg.length; i++) procMsg[i] = null;
+        for (int i = 0; i < MAX_PROCS; i++) procMoves[i] = false;
         try {
             InputStream is = GameWorld.class.getResourceAsStream(path);
             if (is == null) return;
@@ -464,6 +520,29 @@ public final class GameWorld {
                 byte[] text = new byte[len];
                 dis.readFully(text);
                 if (id > 0) procMsg[id] = new String(text, "US-ASCII");
+            }
+            int vc = dis.readUnsignedByte();
+            for (int v = 0; v < vc; v++) {
+                int pid = dis.readUnsignedByte();
+                int model = dis.readUnsignedByte();
+                int bx = dis.readShort();
+                int bz = dis.readShort();
+                int ddx = dis.readShort();
+                int ddz = dis.readShort();
+                int hx = dis.readShort();
+                int hz = dis.readShort();
+                int ang = dis.readUnsignedByte();
+                if (movCount >= MAX_PROPS) continue;
+                int k = movCount++;
+                movPid[k] = pid;
+                movModel[k] = model;
+                movBX[k] = bx;
+                movBZ[k] = bz;
+                movDX[k] = ddx;
+                movDZ[k] = ddz;
+                movHX[k] = hx;
+                movHZ[k] = hz;
+                movAng[k] = ang;
             }
             dis.close();
         } catch (Exception e) {
@@ -547,7 +626,7 @@ public final class GameWorld {
             if (st == DSTATE_OPEN && procBackWait[p] > 0) procTimer[p] = procBackWait[p];
             return true;
         }
-        if (procCell[p].length > 0) {
+        if (procCell[p].length > 0 || procMoves[p]) {
             procState[p] = procDelay[p] > 0 ? DSTATE_DELAY : DSTATE_OPENING;
             procTimer[p] = procDelay[p];
         }
@@ -572,6 +651,10 @@ public final class GameWorld {
         if (st == DSTATE_IDLE) return;
         boolean blocked = playerInProcCells(p, cx, cz);
         int step = Math.max(4, Math.min(64, procSpeed[p] * 3));
+        if (procMoves[p]) {
+            // The original: stage = seconds * speed / 10, so a full move takes 10 / speed seconds.
+            step = Math.max(1, procSpeed[p] * STAGE_ONE / (10 * TICKS_PER_SECOND));
+        }
         switch (st) {
             case DSTATE_DELAY:
                 if (--procTimer[p] <= 0) procState[p] = DSTATE_OPENING;
@@ -629,6 +712,84 @@ public final class GameWorld {
             }
         }
         for (int p = 0; p < procCount; p++) advanceProc(p, cx, cz);
+        updateMovers();
+    }
+
+    /**
+     * Moves each mover's prop box to its proc's stage. Entities that the box reaches are shoved
+     * to its leading face (the original's GetFloorLevel ignores dynamic models, so nothing rides
+     * the platform; the box only blocks and pushes).
+     */
+    private void updateMovers() {
+        for (int i = 0; i < propCount; i++) {
+            int p = propMovProc[i];
+            if (!propActive[i] || p < 0) continue;
+            int stage = procStage[p];
+            int nx = (propBaseX[i] + propMoveDX[i] * stage / STAGE_ONE) << 16;
+            int nz = (propBaseZ[i] + propMoveDZ[i] * stage / STAGE_ONE) << 16;
+            if (nx == propX[i] && nz == propZ[i]) continue;
+            int frameDX = nx - propX[i];
+            int frameDZ = nz - propZ[i];
+            propX[i] = nx;
+            propZ[i] = nz;
+            propSector[i] = getSectorAtPoint(nx, nz);
+            shoveFromMover(i, frameDX, frameDZ);
+        }
+    }
+
+    /** Pushes the player and live monsters inside mover box i to its leading face. */
+    private void shoveFromMover(int i, int frameDX, int frameDZ) {
+        int hx = propHalfX[i] + CollisionSystem.COLLISION_RADIUS;
+        int hz = propHalfZ[i] + CollisionSystem.COLLISION_RADIUS;
+        int sx = frameDX > 0 ? 1 : (frameDX < 0 ? -1 : 0);
+        int sz = frameDZ > 0 ? 1 : (frameDZ < 0 ? -1 : 0);
+        int px = propX[i];
+        int pz = propZ[i];
+
+        int ox = playerBody.x - px;
+        int oz = playerBody.z - pz;
+        if (ox > -hx && ox < hx && oz > -hz && oz < hz) {
+            int tx = sx != 0 ? px + sx * hx : playerBody.x;
+            int tz = sx != 0 ? playerBody.z : pz + sz * hz;
+            // Never shove the player into a wall: a blocked shove leaves the box pushout to act.
+            if (getSectorAtPoint(tx, tz) != null) {
+                playerBody.x = tx;
+                playerBody.z = tz;
+            }
+        }
+        for (int m = 0; m < monCount; m++) {
+            if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
+            int mx = monX[m] - px;
+            int mz = monZ[m] - pz;
+            if (mx > -hx && mx < hx && mz > -hz && mz < hz) {
+                if (sx != 0) monX[m] = px + sx * hx;
+                else monZ[m] = pz + sz * hz;
+                monSector[m] = getSectorAtPoint(monX[m], monZ[m]);
+            }
+        }
+    }
+
+    /** Adds the level's movers as prop slots after the static props (after both sidecars load). */
+    private void attachMovers() {
+        for (int k = 0; k < movCount; k++) {
+            int i = propCount;
+            if (i >= MAX_PROPS) break;
+            propCount++;
+            propActive[i] = true;
+            propModelId[i] = movModel[k];
+            propHalfX[i] = movHX[k] << 16;
+            propHalfZ[i] = movHZ[k] << 16;
+            propAngle[i] = MathUtils.fromAngle4096((movAng[k] & 7) << 9);
+            propBaseX[i] = movBX[k];
+            propBaseZ[i] = movBZ[k];
+            propMoveDX[i] = movDX[k];
+            propMoveDZ[i] = movDZ[k];
+            propMovProc[i] = procIndex(movPid[k]);
+            if (propMovProc[i] >= 0) procMoves[propMovProc[i]] = true;
+            propX[i] = movBX[k] << 16;
+            propZ[i] = movBZ[k] << 16;
+            propSector[i] = getSectorAtPoint(propX[i], propZ[i]);
+        }
     }
 
     /** The level ends when every enemy is down and the player reaches the exit point. */
@@ -672,6 +833,7 @@ public final class GameWorld {
         this.monCount = 0;
         this.itemCount = 0;
         this.propCount = 0;
+        for (int i = 0; i < MAX_PROPS; i++) propMovProc[i] = -1;
         for (int i = 0; i < MAX_LIMBS; i++) limbActive[i] = false;
         for (int i = 0; i < MAX_PROJ; i++) projActive[i] = false;
 
@@ -681,6 +843,10 @@ public final class GameWorld {
 
         // Doors, switches and keys are per level; the player starts each level without keys
         loadProcsSidecar("/levels/procs" + (levelIndex + 1) + ".bin");
+        attachMovers();
+        for (int m = 0; m < monCount; m++) {
+            pushMonsterOutOfProps(m);   // a platform may stand where a monster was placed
+        }
         hasGreenKey = false;
         hasRedKey = false;
         hasBlueKey = false;
