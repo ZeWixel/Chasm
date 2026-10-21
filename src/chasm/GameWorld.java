@@ -188,6 +188,9 @@ public final class GameWorld {
     public final int[] propZ           = new int[MAX_PROPS];
     public final int[] propAngle       = new int[MAX_PROPS];
     public final Sector[] propSector   = new Sector[MAX_PROPS];
+    /** Simplified collision box half-extents (world units, 16.16), read from the sidecar. */
+    public final int[] propHalfX       = new int[MAX_PROPS];
+    public final int[] propHalfZ       = new int[MAX_PROPS];
 
     // ==================== 3D Projectiles & Gibs ====================
     public static final int MAX_PROJ = 24;
@@ -457,10 +460,14 @@ public final class GameWorld {
                 int xUnits = dis.readShort();
                 int zUnits = dis.readShort();
                 int pang = dis.readUnsignedByte();
+                int halfX = dis.readShort();
+                int halfZ = dis.readShort();
                 if (i >= MAX_PROPS) continue;
 
                 if (modelId < 30 || modelId > 32) modelId = 30 + (i % 3);
                 propActive[i] = true;
+                propHalfX[i] = halfX << 16;
+                propHalfZ[i] = halfZ << 16;
                 propModelId[i] = modelId;
                 propX[i] = xUnits << 16;
                 propZ[i] = zUnits << 16;
@@ -472,6 +479,19 @@ public final class GameWorld {
         } catch (Exception e) {
             // Ignore malformed sidecar
         }
+    }
+
+    /** True when (x, z) is inside any static prop box, grown by the monster collision radius. */
+    private boolean insidePropBox(int x, int z) {
+        for (int p = 0; p < propCount; p++) {
+            if (!propActive[p]) continue;
+            int hx = propHalfX[p] + CollisionSystem.COLLISION_RADIUS;
+            int hz = propHalfZ[p] + CollisionSystem.COLLISION_RADIUS;
+            int ox = x - propX[p];
+            int oz = z - propZ[p];
+            if (ox > -hx && ox < hx && oz > -hz && oz < hz) return true;
+        }
+        return false;
     }
 
     public void setMessage(String msg, int ticks) {
@@ -561,6 +581,26 @@ public final class GameWorld {
                 WallDefinition wall = wallDefinitions[i];
                 if (wall.isCollidable() || CollisionSystem.isWallPassableForSector(curSector, wall)) {
                     CollisionSystem.resolveWallCollision(collisionTestPoint, wall, vertices);
+                }
+            }
+        }
+
+        // Static prop boxes: the player is pushed out along the axis of least penetration.
+        // Axis-aligned boxes with the player's collision radius added keep this to a few
+        // compares per prop, with no allocation on the frame path.
+        for (int p = 0; p < propCount; p++) {
+            if (!propActive[p]) continue;
+            int hx = propHalfX[p] + CollisionSystem.COLLISION_RADIUS;
+            int hz = propHalfZ[p] + CollisionSystem.COLLISION_RADIUS;
+            int ox = collisionTestPoint.x - propX[p];
+            int oz = collisionTestPoint.y - propZ[p];
+            if (ox > -hx && ox < hx && oz > -hz && oz < hz) {
+                int penX = hx - (ox < 0 ? -ox : ox);
+                int penZ = hz - (oz < 0 ? -oz : oz);
+                if (penX < penZ) {
+                    collisionTestPoint.x = propX[p] + (ox >= 0 ? hx : -hx);
+                } else {
+                    collisionTestPoint.y = propZ[p] + (oz >= 0 ? hz : -hz);
                 }
             }
         }
@@ -1088,7 +1128,7 @@ public final class GameWorld {
                     int stepZ = (dz >= 0 ? 1 : -1) * Math.min(Math.abs(dz), 3 << 16);
                     int nx = monX[m] + stepX;
                     int nz = monZ[m] + stepZ;
-                    if (hasLineOfSight(monX[m], monZ[m], nx, nz)) {
+                    if (hasLineOfSight(monX[m], monZ[m], nx, nz) && !insidePropBox(nx, nz)) {
                         monX[m] = nx;
                         monZ[m] = nz;
                         monSector[m] = getSectorAtPoint(nx, nz);

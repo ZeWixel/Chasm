@@ -658,6 +658,34 @@ def serialize_mesh(vc, tris, frames, tex=b"", tex_h=0):
     return buf
 
 
+# Static prop models (sidecar type id -> (model file, model scale)). Shared by the models pack
+# and by the collision half-extents written to the entity sidecars.
+PROP_MODEL_SPECS = {
+    30: ("BAREL1.3O", 1.1),   # Explosive barrel
+    31: ("FARAON.3O", 0.85),  # Pharaoh statue
+    32: ("OBELISK.3O", 0.55), # Obelisk / pillar
+}
+# Renderer conversion for model vertices -> world units (PolyRenderer3D.MODEL_TO_WORLD_FP).
+MODEL_TO_WORLD_FP = 1792
+
+
+def prop_half_extent(model_name, scale):
+    """Simplified collision box for a static prop: half extents on the world X and Z axes.
+
+    The .3O vertex order is (x, y, z) with z vertical, so the horizontal footprint is
+    the largest |x| and |y| of the mesh. Values are in world units, matching what is drawn.
+    """
+    data = csm.read(model_name)
+    vc, _pc, _th = struct.unpack("<3H", data[0x4800:0x4806])
+    max_x = 0
+    max_y = 0
+    for v in range(vc):
+        vx, vy, _vz = struct.unpack("<3h", data[0x3200 + v * 6:0x3200 + (v + 1) * 6])
+        max_x = max(max_x, abs(int(vx * scale)))
+        max_y = max(max_y, abs(int(vy * scale)))
+    return (max_x * MODEL_TO_WORLD_FP) >> 16, (max_y * MODEL_TO_WORLD_FP) >> 16
+
+
 def build_models_pack():
     monster_names = [
         "MONGF.CAR",     # 0: Mong Soldier
@@ -694,9 +722,9 @@ def build_models_pack():
         ("R_CARD.3O",   1.5),  # 27: Red Key
         ("G_CARD.3O",   1.5),  # 28: Green Key
         ("B_CARD.3O",   1.5),  # 29: Blue Key
-        ("BAREL1.3O",   1.1),  # 30: Explosive Barrel
-        ("FARAON.3O",   0.85), # 31: Pharaoh Statue
-        ("OBELISK.3O",  0.55), # 32: Obelisk / Pillar
+        PROP_MODEL_SPECS[30],  # 30: Explosive Barrel
+        PROP_MODEL_SPECS[31],  # 31: Pharaoh Statue
+        PROP_MODEL_SPECS[32],  # 32: Obelisk / Pillar
         ("GIB1.3O",     1.3),  # 33: Flying Gore Gib
         ("JDISK.3O",    1.2),  # 34: Saw-Disk Projectile
         ("SWORD.3O",    1.2),  # 35: Projectile / Rocket / Bolt
@@ -1101,7 +1129,8 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
         ent_buf.extend(struct.pack(">Bhh", itype, ix, iz))
     ent_buf.extend(struct.pack(">H", len(valid_props)))
     for ptype, px, pz, pang in valid_props:
-        ent_buf.extend(struct.pack(">BhhB", ptype, px, pz, pang))
+        hx, hz = prop_half_extent(*PROP_MODEL_SPECS[ptype])
+        ent_buf.extend(struct.pack(">BhhBhh", ptype, px, pz, pang, hx, hz))
 
     ent_path = os.path.join(LEVELS_DIR, f"entities{level_idx}.bin")
     with open(ent_path, "wb") as f:
