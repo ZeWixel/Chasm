@@ -143,6 +143,16 @@ public final class SoundManager {
         }
     }
 
+    /** Turns background music on or off. Turning it on restarts the current track. */
+    public synchronized void setMusicEnabled(boolean enabled) {
+        musicEnabled = enabled;
+        if (enabled) {
+            playMusic(currentMusicTrack >= 0 ? currentMusicTrack : 0);
+        } else {
+            stopMusic();
+        }
+    }
+
     public synchronized void pauseAll() {
         if (musicPlayer != null) {
             try { musicPlayer.stop(); } catch (Exception e) {}

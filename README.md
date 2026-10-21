@@ -6,7 +6,7 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 
 1. **C3D2/C3B BSP-Portal World Renderer (`PortalRenderer`)**:
    - Adapted from `CovertOps3D-RE`'s BSP-portal engine (`PortalRenderer`, `CustomLevelLoader`, `CustomMaterialSet`, `BSPNode`, `Sector`, `WallDefinition`, `RenderUtils`).
-   - Compiles original Chasm levels from `CSM.BIN` (`MAP.01` → level 1 "Power Station", `MAP.05` → level 2 "Around Pyramids", `MAP.06` → level 3 "Pyramid of Shmuher", `MAP.99` → level 4 Time Chasm Sanctum) into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level4.c3b`) with `0` BSP partition mismatches and 16-color 4-bit `BMP4` paletted wall, floor/ceiling flat, and skybox textures (`/res/textures/custom/materials.c3m`).
+   - Compiles original Chasm levels from `CSM.BIN` (`MAP.01` → level 1 "Power Station", `MAP.05` → level 2 "Around Pyramids", `MAP.06` → level 3 "Pyramid of Shmuher") into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level3.c3b`). `MAP.99` is the briefing background and is not playable, so it is not built with `0` BSP partition mismatches and 16-color 4-bit `BMP4` paletted wall, floor/ceiling flat, and skybox textures (`/res/textures/custom/materials.c3m`).
 
 2. **Software 3D Polygon Renderer Without a Z-Buffer (`PolyRenderer3D`)**:
    - Zero Z-buffer allocation or per-pixel depth buffer reads/writes.
@@ -52,6 +52,7 @@ The main menu's **CONTROLS & HELP** entry shows the same table on the device.
 ## HUD and developer mode
 
 - **Bottom strip:** HP and armour (icons from the original `NSTAT.CEL` art), the active weapon with its ammo (shell icon from `WICONS.CEL`), enemies still alive on the level, and the level number.
+- **MUSIC** and **SOUND FX** (pause menu, items 4 and 5): switch background music and sound effects on or off separately. Choices are saved. Turning SOUND FX off also skips the sound-effect work on each shot, which helps on slower phones.
 - **DEV MODE** (pause menu, third item): toggles god mode and a debug overlay across the top of the 3D view with the player's X/Z position, facing angle, FPS, dismembered-limb count (`LIMBS`) and the shading tag. FPS and LIMBS are shown only in this mode. The setting persists across levels.
 - The icons are cropped at build time by `tools/build_assets.py` into `res/hud_icons.bin`.
 
@@ -75,7 +76,7 @@ A hit flashes the enemy with an additive red glow for a few ticks instead of ove
 
 ## Known limitations
 
-- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–4 in the game are therefore not the Episode 1 missions; they are the data that exists. The in-game names (`LEVEL_NAMES`, briefings) also do not match the compiled maps yet.
+- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels here. Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
 
 - Doors are not compiled from the MAP data yet, so `7` only advances the level after the sector is cleared. The original door, lift, switch and key logic lives in `PROCESS.XX` scripts; `tools/parse_process.py` parses them (procs, messages, `move`/`rotate`/`up`/`xmove`/`ymove`/`wind`/`death` actions, key and switch links), but the runtime does not execute them yet.
 - Some portal walls still show angle-dependent distortion; the root cause has not been isolated.

@@ -36,61 +36,35 @@ public final class GameWorld {
     private final Point2D collisionTestPoint = new Point2D(0, 0);
 
     // ==================== Chasm Gameplay Constants ====================
-    public static final int NUM_LEVELS = 4;
+    // Playable levels with data present in the CSM.BIN used by this build.
+    // MAP.99 is the briefing background, not a playable mission, so it is not included.
+    public static final int NUM_LEVELS = 3;
     public static final String[] LEVEL_NAMES = {
-        "M1: MILITARY BASE",
-        "M2: SEWER CHASM",
-        "M3: ANCIENT TEMPLE",
-        "M4: RIFT SANCTUM"
+        "THE POWER STATION",
+        "AROUND PYRAMIDS",
+        "PYRAMID OF SHMUHER"
     };
 
     public static final String[][] LEVEL_BRIEFINGS = {
         {
-            "EPISODE 1: MILITARY BASE",
-            "Time-channels have opened beneath",
-            "the outpost. Mutated soldiers and",
-            "biomechanical horrors patrol the",
-            "corridors. Sever their weapon arms",
-            "to disarm them before they fire!"
+            "MISSION 1: THE POWER STATION",
+            "Time-channels have opened inside",
+            "the power station. Clear the",
+            "corridors and reach the exit."
         },
         {
-            "EPISODE 2: SEWER CHASM",
-            "Beyond the base drainage lies the",
-            "flooded chasm. Phantoms and acid",
-            "fiends lurk behind every portal.",
-            "Use the Sawblade Launcher to",
-            "dismember enemies at range."
+            "MISSION 2: AROUND PYRAMIDS",
+            "The rift has opened near the",
+            "pyramids. Clear the area and",
+            "find the way out."
         },
         {
-            "EPISODE 3: ANCIENT TEMPLE",
-            "The rift leads into an ancient",
-            "Egyptian temple complex guarded",
-            "by Undead Knights, Mummies, and",
-            "Scorpions. Aim for their weapon",
-            "limbs to neutralize their attacks."
-        },
-        {
-            "EPISODE 4: RIFT SANCTUM",
-            "At the heart of the distortion",
-            "stands the Rift Sanctum. Defeat",
-            "the elite guardians and seal the",
-            "temporal anomaly forever!"
+            "MISSION 3: PYRAMID OF SHMUHER",
+            "Deep inside the pyramid the",
+            "distortion is strongest. Clear",
+            "the chambers and move on."
         }
     };
-
-    public static final String[] WEAPON_NAMES = {
-        "1:RIFT RIFLE",
-        "2:DOUBLE SHOTGUN",
-        "3:CHAINGUN",
-        "4:CROSSBOW",
-        "5:SAW LAUNCHER",
-        "6:MEGAZAPPER"
-    };
-
-    public static final int[] WEAPON_MODEL_IDS = { 11, 12, 13, 14, 15, 16 };
-    public static final int[] WEAPON_COOLDOWN  = { 5, 11, 3, 9, 8, 14 };
-    public static final int[] WEAPON_DAMAGE    = { 24, 52, 18, 42, 48, 85 };
-    public static final int[] WEAPON_AMMO_COST = { 1, 2, 1, 1, 1, 2 };
 
     // Monster AI states
     public static final int MSTATE_INACTIVE = 0;
@@ -116,6 +90,21 @@ public final class GameWorld {
         70, 85, 65, 95, 90, 45, 80, 100, 120, 145, 180
     };
 
+    public static final String[] WEAPON_NAMES = {
+        "1:RIFT RIFLE",
+        "2:DOUBLE SHOTGUN",
+        "3:CHAINGUN",
+        "4:CROSSBOW",
+        "5:SAW LAUNCHER",
+        "6:MEGAZAPPER"
+    };
+
+    public static final int[] WEAPON_MODEL_IDS = { 11, 12, 13, 14, 15, 16 };
+    public static final int[] WEAPON_COOLDOWN  = { 5, 11, 3, 9, 8, 14 };
+    public static final int[] WEAPON_DAMAGE    = { 24, 52, 18, 42, 48, 85 };
+    public static final int[] WEAPON_AMMO_COST = { 1, 2, 1, 1, 1, 2 };
+
+    // Monster AI states
     // ==================== Player & Renderer State ====================
     public final PhysicsBody playerBody = new PhysicsBody(0, 0, 0, 0);
     public final PolyRenderer3D polyRenderer;

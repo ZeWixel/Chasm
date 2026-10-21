@@ -39,6 +39,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     public int screenState = SCREEN_MAIN_MENU;
     private int menuCursor = 0;
     private int pauseCursor = 0;
+    private static final int PAUSE_ITEMS = 8;
     private int selectedStartLevel = 0; // 0..3
     private boolean showAutomap = false;
 
@@ -626,7 +627,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
 
     private void drawPauseOverlay(Graphics g) {
         int boxW = scrW - 32;
-        int boxH = 166;
+        int boxH = 32 + PAUSE_ITEMS * 19 + 8;
         int boxX = 16;
         int boxY = (viewH - boxH) >> 1;
 
@@ -645,6 +646,8 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             "RESUME MISSION",
             "SHADING: " + shadeStr,
             "DEV MODE: " + (world.devMode ? "ON" : "OFF"),
+            "MUSIC: " + (sound != null && sound.musicEnabled ? "ON" : "OFF"),
+            "SOUND FX: " + (sound != null && sound.sfxEnabled ? "ON" : "OFF"),
             "SKIP TO NEXT LEVEL",
             "MAIN MENU",
             "QUIT TO PHONE"
@@ -660,7 +663,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 g.setColor(0xC8C4B4);
             }
             g.drawString(opts[i], scrW >> 1, y, Graphics.TOP | Graphics.HCENTER);
-            y += 21;
+            y += 19;
         }
     }
 
@@ -779,9 +782,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
 
         if (screenState == SCREEN_PAUSED) {
             if (keyCode == KEY_NUM2 || action == UP) {
-                pauseCursor = (pauseCursor + 5) % 6;
+                pauseCursor = (pauseCursor + PAUSE_ITEMS - 1) % PAUSE_ITEMS;
             } else if (keyCode == KEY_NUM8 || action == DOWN) {
-                pauseCursor = (pauseCursor + 1) % 6;
+                pauseCursor = (pauseCursor + 1) % PAUSE_ITEMS;
             } else if (keyCode == KEY_NUM5 || action == FIRE || keyCode == KEY_SOFT_LEFT1) {
                 handlePauseSelect();
             } else if (keyCode == KEY_NUM9 || keyCode == KEY_SOFT_RIGHT1 || keyCode == KEY_SE_BACK) {
@@ -897,14 +900,28 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 world.devMode = !world.devMode;
                 break;
             case 3:
+                // Music on/off. Stay in the menu; the choice is saved in the record store.
+                if (sound != null) {
+                    sound.setMusicEnabled(!sound.musicEnabled);
+                    if (midlet != null) midlet.saveSettings();
+                }
+                break;
+            case 4:
+                // Sound effects on/off (independent of music).
+                if (sound != null) {
+                    sound.sfxEnabled = !sound.sfxEnabled;
+                    if (midlet != null) midlet.saveSettings();
+                }
+                break;
+            case 5:
                 world.levelCompleted = true;
                 screenState = SCREEN_PLAYING;
                 break;
-            case 4:
+            case 6:
                 screenState = SCREEN_MAIN_MENU;
                 if (sound != null) sound.playMusic(0);
                 break;
-            case 5:
+            case 7:
                 if (midlet != null) midlet.exitGame();
                 break;
         }
