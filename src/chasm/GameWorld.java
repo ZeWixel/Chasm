@@ -359,6 +359,169 @@ public final class GameWorld {
         }
     }
 
+    // ==================== Doors, Switches & Keys (PROCESS.XX) ====================
+    public static final int MAX_DOORS = 16;
+    public static final int DOOR_STATE_CLOSED  = 0;
+    public static final int DOOR_STATE_OPENING = 1;
+    public static final int DOOR_STATE_OPEN    = 2;
+    /** Ceiling units a door moves per tick while opening. */
+    public static final int DOOR_SPEED = 3;
+    /** Cell size in world units; matches the compiler's SCALE. */
+    private static final int CELL_UNITS = 96;
+
+    public int doorCount = 0;
+    private final int[] doorProc = new int[MAX_DOORS];
+    private final int[] doorKey = new int[MAX_DOORS];
+    private final boolean[] doorLocked = new boolean[MAX_DOORS];
+    private final int[] doorState = new int[MAX_DOORS];
+    private final int[][] doorTrig = new int[MAX_DOORS][];   // switch cells: x, y pairs
+    private final int[][] doorUnlock = new int[MAX_DOORS][]; // proc ids unlocked by this proc
+    private final int[][] doorCell = new int[MAX_DOORS][];   // door cells: x, y, sector, openCeil
+    public boolean hasGreenKey = false;
+    public boolean hasRedKey = false;
+
+    private void loadDoorsSidecar(String path) {
+        doorCount = 0;
+        try {
+            InputStream is = GameWorld.class.getResourceAsStream(path);
+            if (is == null) return;
+            DataInputStream dis = new DataInputStream(is);
+            int n = dis.readUnsignedShort();
+            for (int i = 0; i < n; i++) {
+                int pid = dis.readUnsignedByte();
+                int key = dis.readUnsignedByte();
+                int locked = dis.readUnsignedByte();
+                dis.readUnsignedShort(); // reserved
+                int tc = dis.readUnsignedByte();
+                int[] trig = new int[tc * 2];
+                for (int t = 0; t < trig.length; t++) trig[t] = dis.readUnsignedByte();
+                int uc = dis.readUnsignedByte();
+                int[] unl = new int[uc];
+                for (int u = 0; u < uc; u++) unl[u] = dis.readUnsignedByte();
+                int cc = dis.readUnsignedByte();
+                int[] cells = new int[cc * 4];
+                for (int c = 0; c < cc; c++) {
+                    cells[c * 4] = dis.readUnsignedByte();
+                    cells[c * 4 + 1] = dis.readUnsignedByte();
+                    cells[c * 4 + 2] = dis.readUnsignedShort();
+                    cells[c * 4 + 3] = dis.readUnsignedShort();
+                }
+                if (i >= MAX_DOORS) continue;
+                doorProc[doorCount] = pid;
+                doorKey[doorCount] = key;
+                doorLocked[doorCount] = locked != 0;
+                doorState[doorCount] = DOOR_STATE_CLOSED;
+                doorTrig[doorCount] = trig;
+                doorUnlock[doorCount] = unl;
+                doorCell[doorCount] = cells;
+                doorCount++;
+            }
+            dis.close();
+        } catch (Exception e) {
+            doorCount = 0;
+        }
+    }
+
+    /** Cell index of a 16.16 world coordinate (cells are indexed from 32 at the origin). */
+    private static int cellOf(int fp) {
+        int u = fp >> 16;
+        int q = u / CELL_UNITS;
+        if (u < 0 && q * CELL_UNITS != u) q--;
+        return q + 32;
+    }
+
+    private static boolean cellNear(int x, int y, int cx, int cz) {
+        return Math.abs(x - cx) <= 1 && Math.abs(y - cz) <= 1;
+    }
+
+    /** True when a switch cell of record d is next to the player. */
+    private boolean switchNear(int d, int cx, int cz) {
+        int[] trig = doorTrig[d];
+        for (int t = 0; t < trig.length; t += 2) {
+            if (cellNear(trig[t], trig[t + 1], cx, cz)) return true;
+        }
+        return false;
+    }
+
+    /** True when one of record d's own door cells is next to the player. */
+    private boolean doorCellNear(int d, int cx, int cz) {
+        int[] cells = doorCell[d];
+        for (int c = 0; c < cells.length; c += 4) {
+            if (cellNear(cells[c], cells[c + 1], cx, cz)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Uses the switch or door next to the player. Switches are checked first, so a switch
+     * that happens to sit beside another door's cells still wins. Returns true when one was found.
+     */
+    private boolean useDoorsNearPlayer() {
+        int cx = cellOf(playerBody.x);
+        int cz = cellOf(playerBody.z);
+        for (int d = 0; d < doorCount; d++) {
+            if (doorTrig[d].length > 0 && switchNear(d, cx, cz)) {
+                fireDoor(d);
+                return true;
+            }
+        }
+        for (int d = 0; d < doorCount; d++) {
+            if (doorTrig[d].length == 0 && doorCellNear(d, cx, cz)) {
+                fireDoor(d);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void fireDoor(int d) {
+        if (doorLocked[d]) {
+            int k = doorKey[d];
+            if ((k == 1 && hasGreenKey) || (k == 2 && hasRedKey)) {
+                doorLocked[d] = false;
+                setMessage(k == 1 ? "GREEN DOOR UNLOCKED" : "RED DOOR UNLOCKED", 40);
+            } else {
+                setMessage(k == 1 ? "LOCKED - NEED GREEN KEY" : (k == 2 ? "LOCKED - NEED RED KEY" : "LOCKED"), 40);
+                return;
+            }
+        }
+        if (doorCell[d].length > 0 && doorState[d] == DOOR_STATE_CLOSED) {
+            doorState[d] = DOOR_STATE_OPENING;
+        }
+        int[] unl = doorUnlock[d];
+        for (int u = 0; u < unl.length; u++) unlockDoorProc(unl[u]);
+    }
+
+    private void unlockDoorProc(int pid) {
+        for (int d = 0; d < doorCount; d++) {
+            if (doorProc[d] == pid) doorLocked[d] = false;
+        }
+    }
+
+    /** Raises each opening door's sector ceilings toward their open height, DOOR_SPEED per tick. */
+    private void updateDoors() {
+        if (sectors == null) return;
+        for (int d = 0; d < doorCount; d++) {
+            if (doorState[d] != DOOR_STATE_OPENING) continue;
+            int[] cells = doorCell[d];
+            boolean done = true;
+            for (int c = 0; c < cells.length; c += 4) {
+                int sid = cells[c + 2];
+                if (sid < 0 || sid >= sectors.length) continue;
+                SectorData sd = sectors[sid];
+                int target = cells[c + 3];
+                int h = sd.ceilingHeight;
+                if (h < target) {
+                    h += DOOR_SPEED;
+                    if (h > target) h = target;
+                    sd.ceilingHeight = (short) h;
+                    if (h < target) done = false;
+                }
+            }
+            if (done) doorState[d] = DOOR_STATE_OPEN;
+        }
+    }
+
     // ==================== Level & Entity Sidecar Loading ====================
 
     public void loadLevel(int levelIndex) {
@@ -390,6 +553,11 @@ public final class GameWorld {
         // Load Chasm 3D entities sidecar
         String entPath = "/levels/entities" + (levelIndex + 1) + ".bin";
         loadEntitiesSidecar(entPath);
+
+        // Doors, switches and keys are per level; the player starts each level without keys
+        loadDoorsSidecar("/levels/doors" + (levelIndex + 1) + ".bin");
+        hasGreenKey = false;
+        hasRedKey = false;
 
         setMessage(LEVEL_NAMES[levelIndex], 45);
     }
@@ -689,6 +857,16 @@ public final class GameWorld {
             if (Math.abs(playerBody.x - itemX[i]) < pickupRadius
                     && Math.abs(playerBody.z - itemZ[i]) < pickupRadius) {
                 itemActive[i] = false;
+                if (itemModelId[i] == 27) {
+                    hasRedKey = true;
+                    setMessage("RED KEY", 30);
+                    continue;
+                }
+                if (itemModelId[i] == 28) {
+                    hasGreenKey = true;
+                    setMessage("GREEN KEY", 30);
+                    continue;
+                }
                 int t = itemType[i] % 8;
                 if (t == 0) {
                     health = Math.min(100, health + 25);
@@ -992,6 +1170,7 @@ public final class GameWorld {
 
     /** '*' key: use. Clears the level once every enemy is down; doors are not in the portal data yet. */
     public void interactOrNextLevel() {
+        if (useDoorsNearPlayer()) return;
         int alive = 0;
         for (int i = 0; i < monCount; i++) {
             if (monState[i] != MSTATE_INACTIVE && monState[i] != MSTATE_DEAD) alive++;
@@ -1036,6 +1215,7 @@ public final class GameWorld {
         updateDetachedLimbs();
         updateProjectiles();
         updateMonsters();
+        updateDoors();
     }
 
     private void updateDetachedLimbs() {

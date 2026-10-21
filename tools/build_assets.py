@@ -789,6 +789,42 @@ CHASM_TO_LOCAL_ITEM = {
 }
 
 
+DOOR_CLOSED_GAP = 16  # closed door: ceiling 16 units above the floor (below the 50-unit clearance)
+
+
+def load_door_procs(map_num):
+    """Door and switch data from PROCESS.XX, keyed by proc id.
+
+    cells:   (x, y) cells moved by 'move' actions (the door cells)
+    trig:    LinkSwitchAt cell (the switch that fires the proc), if any
+    unlocks: proc ids this proc unlocks ('unlock N' actions)
+    key:     0 none, 1 green key, 2 red key
+    locked:  header 'Lock'
+    """
+    from parse_process import parse_process
+    parsed = parse_process(csm.read(f"PROCESS.{map_num:02d}"))
+    procs = {}
+    for pid, p in parsed["procs"].items():
+        h = p["header"]
+        cells = []
+        unlocks = []
+        for name, args in p["actions"]:
+            if name == "move" and len(args) >= 2:
+                cells.append((args[0], args[1]))
+            elif name == "unlock" and args:
+                unlocks.append(args[0])
+        trig = h.get("linkswitchat")
+        procs[pid] = dict(
+            cells=cells,
+            trig=[(trig[0], trig[1])] if trig else [],
+            unlocks=unlocks,
+            key=1 if h.get("greenkey") else (2 if h.get("redkey") else 0),
+            # A keyed door is locked until its key is used, even without a 'lock' header.
+            locked=bool(h.get("lock")) or bool(h.get("greenkey") or h.get("redkey")),
+        )
+    return procs
+
+
 def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     mdata = csm.read(f"MAP.{map_num:02d}")
     rdata = csm.read(f"RESOURCE.{map_num:02d}").decode("ascii", errors="ignore")
@@ -799,16 +835,18 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
         level_idx, map_num, mdata, rdata, floors, ceils)
 
     # Parse static 3O model filenames from RESOURCE.XX
+    # Object definitions live in RESOURCE.XX #newobjects (no ;Models section exists):
+    # row k is wall-object tid 163+k, and the FileName is column 10.
     model_files = {}
     lines = [l.strip() for l in rdata.splitlines()]
     i = 0
-    while i < len(lines) and ";Models" not in lines[i]:
+    while i < len(lines) and not lines[i].startswith("#newobjects"):
         i += 1
     i += 1
     m_idx = 0
-    while i < len(lines) and ";Walls" not in lines[i]:
+    while i < len(lines) and not lines[i].startswith("#end"):
         line = lines[i]
-        if line and not line.startswith(";"):
+        if line and not line.startswith(";") and not line.startswith("["):
             parts = line.split()
             if len(parts) >= 10:
                 model_files[m_idx] = parts[9].upper()
@@ -885,6 +923,10 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
                     raw_props.append((31, wx0, wy0, unk & 7))
                 elif any(s in mfname for s in ("OBELISK", "COLUMN", "COLU_", "PIER", "PALM", "VASE")):
                     raw_props.append((32, wx0, wy0, unk & 7))
+                elif mfname.startswith("G_CARD"):
+                    raw_items.append((28, wx0, wy0))   # green key
+                elif mfname.startswith("KEY.3O"):
+                    raw_items.append((27, wx0, wy0))   # red key (generic key object)
 
     sx, sy = int(spawn_fx), int(spawn_fy)
     visited = set([(sx, sy)])
@@ -911,23 +953,42 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
                 c3d_ang = cand_ang
                 fwd_dx, fwd_dy = dx, dy
 
+    # Doors: a PROCESS proc that moves cells owns those cells. Each door's cells get their
+    # own sectors (never merged with neighbours), so the ceiling can move independently.
+    procs = load_door_procs(map_num)
+    door_of_cell = {}
+    for pid in sorted(procs):
+        for c in procs[pid]['cells']:
+            if c in visited and c not in door_of_cell:
+                door_of_cell[c] = pid
+    door_records = []
+    for pid in sorted(procs):
+        p = procs[pid]
+        my_cells = sorted({c for c in p['cells'] if door_of_cell.get(c) == pid})
+        if my_cells or p['trig'] or p['unlocks']:
+            door_records.append((pid, p, my_cells))
+
+    def cell_key(c):
+        return (ceils[c[0] * 64 + c[1]] == 62, cell_floor_step.get(c, 0), door_of_cell.get(c, -1))
+
     # Greedy rectangle merge into convex clockwise sectors
     unassigned = set(visited)
     rects = []
+    rect_door = []
     cell_to_rect = {}
     for (x0, y0) in sorted(visited, key=lambda p: (p[1], p[0])):
         if (x0, y0) not in unassigned:
             continue
-        sky = (ceils[x0 * 64 + y0] == 62)
-        fstep = cell_floor_step.get((x0, y0), 0)
+        key0 = cell_key((x0, y0))
+        sky, fstep, _door0 = key0
         x1 = x0 + 1
-        while (x1, y0) in unassigned and (ceils[x1 * 64 + y0] == 62) == sky and cell_floor_step.get((x1, y0), 0) == fstep and (x1 - x0) < 7:
+        while (x1, y0) in unassigned and cell_key((x1, y0)) == key0 and (x1 - x0) < 7:
             x1 += 1
         y1 = y0 + 1
         while (y1 - y0) < 7:
             ok = True
             for tx in range(x0, x1):
-                if (tx, y1) not in unassigned or (ceils[tx * 64 + y1] == 62) != sky or cell_floor_step.get((tx, y1), 0) != fstep:
+                if (tx, y1) not in unassigned or cell_key((tx, y1)) != key0:
                     ok = False
                     break
             if ok:
@@ -940,6 +1001,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
                 unassigned.remove((tx, ty))
                 cell_to_rect[(tx, ty)] = sec_id
         rects.append((x0, y0, x1, y1, sky, fstep))
+        rect_door.append(_door0)
 
     def to_xz(gx, gy):
         return ((gx - 32) * SCALE, (gy - 32) * SCALE)
@@ -955,6 +1017,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
         return vert_map[pt]
 
     sectors = []
+    sector_open_h = []
     for sec_id, (x0, y0, x1, y1, sky, fstep) in enumerate(rects):
         ft = flat_slot.get(floors[x0 * 64 + y0], default_flat)
         ct = 51 if sky else flat_slot.get(ceils[x0 * 64 + y0], default_flat)
@@ -962,7 +1025,9 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
         light = max(9, min(15, 15 - (amb // 4)))
         fl_h = fstep
         cl_h = 128 if sky else cell_ceil_low.get((x0, y0), 96)
-        sectors.append(dict(floor=fl_h, ceil=cl_h, ceil_tex=ct, floor_tex=ft,
+        sector_open_h.append(cl_h)
+        door_closed = rect_door[sec_id] >= 0
+        sectors.append(dict(floor=fl_h, ceil=(fl_h + DOOR_CLOSED_GAP if door_closed else cl_h), ceil_tex=ct, floor_tex=ft,
                             light_packed=light << 4, tag=0, type=0))
 
     surfaces = []
@@ -1102,7 +1167,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     for ptype, fx, fy, pang in raw_props:
         if (int(fx), int(fy)) in visited and math.hypot(fx - spawn_fx, fy - spawn_fy) > 1.5:
             valid_props.append((ptype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE), pang))
-    for idx_p in range(min(8, len(sector_centers))):
+    for idx_p in range(0 if valid_props else min(8, len(sector_centers))):
         cx, cy = sector_centers[(idx_p * 4 + 2) % len(sector_centers)]
         ptype = 30 if (idx_p % 2 == 0) else (31 if level_idx >= 2 else 32)
         valid_props.append((ptype, int((cx - 32.0) * SCALE) - 20, int((cy - 32.0) * SCALE) + 20, idx_p & 7))
@@ -1136,6 +1201,29 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     with open(ent_path, "wb") as f:
         f.write(ent_buf)
 
+    # doors{N}.bin: u16 count, then per record:
+    #   >BBBH  procId, key (0 none, 1 green, 2 red), locked, openCeil
+    #   >B     trigger count, then >BB cell x, y  (LinkSwitchAt cells)
+    #   >B     unlock count, then >B proc ids     (proc ids unlocked when this one fires)
+    #   >B     cell count, then >BBHH cell x, y, sectorId, openCeil (per cell)
+    door_buf = bytearray()
+    door_buf.extend(struct.pack(">H", len(door_records)))
+    for pid, p, my_cells in door_records:
+        key_kind = p['key']
+        door_buf.extend(struct.pack(">BBBH", pid & 0xFF, key_kind, 1 if p['locked'] else 0, 0))
+        door_buf.extend(struct.pack(">B", len(p['trig'])))
+        for tx, ty in p['trig']:
+            door_buf.extend(struct.pack(">BB", tx & 0xFF, ty & 0xFF))
+        door_buf.extend(struct.pack(">B", len(p['unlocks'])))
+        for u in p['unlocks']:
+            door_buf.extend(struct.pack(">B", u & 0xFF))
+        door_buf.extend(struct.pack(">B", len(my_cells)))
+        for cx, cy in my_cells:
+            sid = cell_to_rect[(cx, cy)]
+            door_buf.extend(struct.pack(">BBHH", cx, cy, sid, sector_open_h[sid]))
+    with open(os.path.join(LEVELS_DIR, f"doors{level_idx}.bin"), "wb") as f:
+        f.write(door_buf)
+
     info = c3d2_core.read_c3b(out_c3b)
     print(f"[OK] Level {level_idx} (MAP.{map_num:02d}): sectors={info['sectors']}, walls={info['walls']}, "
           f"nodes={info['nodes']}, bsp_err={len(report.fail_samples)}, "
@@ -1144,9 +1232,9 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 
 
 def build_all_levels():
-    compile_chasm_map_to_c3b(1, 1, max_cells=220)
-    compile_chasm_map_to_c3b(2, 5, max_cells=220)
-    compile_chasm_map_to_c3b(3, 6, max_cells=220)
+    compile_chasm_map_to_c3b(1, 1, max_cells=2000)
+    compile_chasm_map_to_c3b(2, 5, max_cells=2000)
+    compile_chasm_map_to_c3b(3, 6, max_cells=2000)
     # MAP.99 is the briefing background (not playable), so only three playable maps are built.
 
 

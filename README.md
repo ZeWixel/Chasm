@@ -42,7 +42,7 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 | 4 / 6 | Turn left / right |
 | 1 / 3 | Strafe left / right |
 | 5 | Fire |
-| 7 | Use: open / interact; next level once the sector is clear |
+| 7 | Use: open switches and doors next to you, go through the exit once the sector is clear |
 | 9 | Level map (automap) toggle |
 | * / # | Previous / next weapon |
 | 0 | Jump |
@@ -79,11 +79,25 @@ A hit flashes the enemy with an additive red glow for a few ticks instead of ove
 
 Static 3D props (explosive barrels, pharaoh statues, obelisks) block movement through simplified axis-aligned boxes. Each box's half-extents are the largest horizontal vertex offsets of the model, scaled with the renderer's model-to-world factor, and are stored in the entity sidecar (`>BhhBhh` per prop). The player is pushed out along the axis of least penetration. Monsters are pushed out the same way when they spawn or update inside a box, so a spawn on top of a barrel is recoverable. A chasing monster that is blocked by a box detours around it on one side for a fixed number of ticks, which avoids oscillating at the corner. Projectiles and line of sight still ignore props.
 
+## Doors, switches and keys
+
+The `PROCESS.XX` script of each map is compiled by `tools/build_assets.py` into `res/levels/doors{N}.bin`. Each record is one proc that moves cells (a door), a switch cell (`linkswitchat`), or an `unlock N` link to another proc.
+
+- **Doors** are sectors whose ceiling starts 16 units above the floor, so they block the player. Using a door opens it: its ceiling rises to the open height at 3 units per tick.
+- **Switches** are used from the adjacent cell. Switches are checked before doors, so a switch next to another door's cells fires first. When a switch fires, its `unlock` targets lose their lock.
+- **Locked doors**: a door is locked when its header has `lock` or a `greenkey`/`redkey` requirement. Without the key it shows `LOCKED`; a green or red key picked up on the level opens the matching door.
+- **Keys** are items 28 (green) and 27 (red). They are carried per level and reset when a level loads.
+
+Not implemented yet: `up`, `rotate`, `light`, `playani`, `waitout` and the lift and move actions beyond the door cells. Those are parsed but ignored, so a door or lift that needs them behaves as a plain door.
+
+Each level now compiles its whole walkable area instead of the first 220 cells, so levels 1–3 have 151, 88 and 231 sectors. The larger geometry is the reason keys and doors behind the first room work.
+
 ## Known limitations
 
 - **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels here. Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
 
-- Doors are not compiled from the MAP data yet, so `7` only advances the level after the sector is cleared. The original door, lift, switch and key logic lives in `PROCESS.XX` scripts; `tools/parse_process.py` parses them (procs, messages, `move`/`rotate`/`up`/`xmove`/`ymove`/`wind`/`death` actions, key and switch links), but the runtime does not execute them yet.
+- Only doors, switches, keys and `unlock` chains are executed from `PROCESS.XX`. Lifts (`up`), rotating parts, lights, animations, messages and `death` triggers are not.
+- The full-area geometry has not been measured on a device. Frame rate and memory with 150–230 sectors are unknown.
 - Some portal walls still show angle-dependent distortion; the root cause has not been isolated.
 - Transparent grate textures are drawn as opaque (no masked mid-texture pass yet).
 - The first build's staircase floor steps are only partially restored.
