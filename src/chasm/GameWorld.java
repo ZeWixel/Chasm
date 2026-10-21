@@ -140,6 +140,10 @@ public final class GameWorld {
     public int monCount = 0;
     public final int[] monType      = new int[MAX_MONSTERS];
     public final int[] monX         = new int[MAX_MONSTERS];
+    /** Prop-avoidance state: ticks left on the current detour and its side (+1 / -1). */
+    private static final int DETOUR_TICKS = 24;
+    private final int[] monDetourTicks = new int[MAX_MONSTERS];
+    private final int[] monDetourSide  = new int[MAX_MONSTERS];
     public final int[] monZ         = new int[MAX_MONSTERS];
     public final int[] monAngle     = new int[MAX_MONSTERS];
     public final int[] monHP        = new int[MAX_MONSTERS];
@@ -432,6 +436,7 @@ public final class GameWorld {
                 monPartMask[i] = Model3D.MASK_INTACT_DEFAULT;
                 monPainTimer[i] = 0;
                 monSector[i] = getSectorAtPoint(monX[i], monZ[i]);
+                monDetourTicks[i] = 0;
             }
 
             // Items: >H count, then >Bhh (modelId 17..28, ix, iz)
@@ -475,10 +480,60 @@ public final class GameWorld {
                 propSector[i] = getSectorAtPoint(propX[i], propZ[i]);
             }
 
+            // A monster can spawn inside a prop box (e.g. the same cell as a barrel); push it out.
+            for (int m = 0; m < monCount; m++) {
+                pushMonsterOutOfProps(m);
+            }
+
             dis.close();
         } catch (Exception e) {
             // Ignore malformed sidecar
         }
+    }
+
+    private boolean tryMonsterStep(int m, int dx, int dz) {
+        int nx = monX[m] + dx;
+        int nz = monZ[m] + dz;
+        if (insidePropBox(nx, nz) || !hasLineOfSight(monX[m], monZ[m], nx, nz)) return false;
+        moveMonsterTo(m, nx, nz);
+        return true;
+    }
+
+    private void moveMonsterTo(int m, int x, int z) {
+        monX[m] = x;
+        monZ[m] = z;
+        monSector[m] = getSectorAtPoint(x, z);
+    }
+
+    /**
+     * Pushes monster m out of any prop box along the axis of least penetration, the same
+     * rule used for the player. Two passes handle a monster that lands between two boxes.
+     */
+    private void pushMonsterOutOfProps(int m) {
+        boolean moved = false;
+        for (int pass = 0; pass < 2; pass++) {
+            boolean hit = false;
+            for (int p = 0; p < propCount; p++) {
+                if (!propActive[p]) continue;
+                int hx = propHalfX[p] + CollisionSystem.COLLISION_RADIUS;
+                int hz = propHalfZ[p] + CollisionSystem.COLLISION_RADIUS;
+                int ox = monX[m] - propX[p];
+                int oz = monZ[m] - propZ[p];
+                if (ox > -hx && ox < hx && oz > -hz && oz < hz) {
+                    int penX = hx - (ox < 0 ? -ox : ox);
+                    int penZ = hz - (oz < 0 ? -oz : oz);
+                    if (penX < penZ) {
+                        monX[m] = propX[p] + (ox >= 0 ? hx : -hx);
+                    } else {
+                        monZ[m] = propZ[p] + (oz >= 0 ? hz : -hz);
+                    }
+                    hit = true;
+                }
+            }
+            if (!hit) break;
+            moved = true;
+        }
+        if (moved) monSector[m] = getSectorAtPoint(monX[m], monZ[m]);
     }
 
     /** True when (x, z) is inside any static prop box, grown by the monster collision radius. */
@@ -1062,6 +1117,7 @@ public final class GameWorld {
         for (int m = 0; m < monCount; m++) {
             int st = monState[m];
             if (st == MSTATE_INACTIVE) continue;
+            pushMonsterOutOfProps(m);
 
             if (monPainTimer[m] > 0) monPainTimer[m]--;
             monStateTick[m]++;
@@ -1128,10 +1184,22 @@ public final class GameWorld {
                     int stepZ = (dz >= 0 ? 1 : -1) * Math.min(Math.abs(dz), 3 << 16);
                     int nx = monX[m] + stepX;
                     int nz = monZ[m] + stepZ;
-                    if (hasLineOfSight(monX[m], monZ[m], nx, nz) && !insidePropBox(nx, nz)) {
-                        monX[m] = nx;
-                        monZ[m] = nz;
-                        monSector[m] = getSectorAtPoint(nx, nz);
+                    // Direct step first. When a prop box blocks it, the monster commits to a
+                    // detour side (+90 or -90 degrees) for DETOUR_TICKS so it does not
+                    // oscillate at the box corner.
+                    if (monDetourTicks[m] > 0) {
+                        monDetourTicks[m]--;
+                        if (!tryMonsterStep(m, -stepZ * monDetourSide[m], stepX * monDetourSide[m])) {
+                            monDetourTicks[m] = 0;
+                        }
+                    } else if (!tryMonsterStep(m, stepX, stepZ)) {
+                        if (tryMonsterStep(m, -stepZ, stepX)) {
+                            monDetourSide[m] = 1;
+                            monDetourTicks[m] = DETOUR_TICKS;
+                        } else if (tryMonsterStep(m, stepZ, -stepX)) {
+                            monDetourSide[m] = -1;
+                            monDetourTicks[m] = DETOUR_TICKS;
+                        }
                     }
                 }
             } else if (st == MSTATE_ATTACK) {
