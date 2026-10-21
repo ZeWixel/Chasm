@@ -792,37 +792,74 @@ CHASM_TO_LOCAL_ITEM = {
 DOOR_CLOSED_GAP = 16  # closed door: ceiling 16 units above the floor (below the 50-unit clearance)
 
 
-def load_door_procs(map_num):
-    """Door and switch data from PROCESS.XX, keyed by proc id.
+# Trigger kinds stored in procs{N}.bin (ids match GameWorld.TRIG_*).
+PROC_TRIG_IDS = {'link': 0, 'floor': 1, 'return': 2, 'onofflink': 3}
+PROC_KEY_IDS = {'green': 1, 'red': 2, 'blue': 3}
 
-    cells:   (x, y) cells moved by 'move' actions (the door cells)
-    trig:    LinkSwitchAt cell (the switch that fires the proc), if any
-    unlocks: proc ids this proc unlocks ('unlock N' actions)
-    key:     0 none, 1 green key, 2 red key
-    locked:  header 'Lock'
+
+def load_proc_defs(map_num):
+    """Door, gate and switch data from PROCESS.XX, keyed by proc id.
+
+    cells:    (x, y) wall cells that a proc moves ('move'/'xmove'/'ymove') or raises ('up').
+              Moved cells become door sectors whose ceiling rises when the proc opens.
+    ups:      (x, y) -> H for 'up' cells (a transparent wall rising by H points).
+    triggers: (kind, x, y): kind 0 'link' (proximity), 1 'floor' (step on),
+              2 'return' (reset the proc), 3 'onofflink' (proximity, toggles).
+              Taken from the #links section and from LinkSwitchAt.
+    unlocks:  proc ids from 'unlock N' actions.
+    key:      0 none, 1 green, 2 red, 3 blue (Greenlock/Redlock/Bluelock or GreenKey/...).
+    locked:   'Lock' or any keyed lock.
+    checkback, startdelay, backwait: seconds (CSM_EDIT.TXT 3.2), speed, onmsg, lockmsg.
     """
     from parse_process import parse_process
     parsed = parse_process(csm.read(f"PROCESS.{map_num:02d}"))
+    trig_by_proc = {}
+    for kind, x, y, pid in parsed["links"]:
+        if kind in PROC_TRIG_IDS:
+            trig_by_proc.setdefault(pid, []).append((PROC_TRIG_IDS[kind], x, y))
     procs = {}
     for pid, p in parsed["procs"].items():
         h = p["header"]
-        cells = []
-        unlocks = []
+        cells, ups, unlocks = [], {}, []
         for name, args in p["actions"]:
-            if name == "move" and len(args) >= 2:
-                cells.append((args[0], args[1]))
+            if name in ("move", "xmove", "ymove", "up") and len(args) >= 2 \
+                    and isinstance(args[0], int) and isinstance(args[1], int):
+                cell = (args[0], args[1])
+                if cell not in cells:
+                    cells.append(cell)
+                if name == "up" and len(args) >= 3:
+                    ups[cell] = int(args[2])
             elif name == "unlock" and args:
                 unlocks.append(args[0])
-        trig = h.get("linkswitchat")
+        triggers = list(trig_by_proc.get(pid, []))
+        if h.get("linkswitchat"):
+            triggers.append((PROC_TRIG_IDS['link'], h["linkswitchat"][0], h["linkswitchat"][1]))
+        key = 0
+        for color, kid in PROC_KEY_IDS.items():
+            if h.get(color + "key") or h.get(color + "lock"):
+                key = kid
+        locked = bool(h.get("lock")) or key != 0
         procs[pid] = dict(
             cells=cells,
-            trig=[(trig[0], trig[1])] if trig else [],
+            ups=ups,
+            triggers=triggers,
             unlocks=unlocks,
-            key=1 if h.get("greenkey") else (2 if h.get("redkey") else 0),
-            # A keyed door is locked until its key is used, even without a 'lock' header.
-            locked=bool(h.get("lock")) or bool(h.get("greenkey") or h.get("redkey")),
+            key=key,
+            locked=locked,
+            checkback=bool(h.get("checkback")),
+            startdelay=float(h.get("startdelay") or 0),
+            backwait=float(h.get("backwait") or 0),
+            speed=int(h.get("speed") or 8),
+            onmsg=int(h.get("onmessage") or 0),
+            lockmsg=int(h.get("lockmessage") or 0),
+            toggle=any(t[0] == PROC_TRIG_IDS['onofflink'] for t in triggers),
         )
-    return procs
+    messages = {}
+    for mid, m in parsed["messages"].items():
+        text = " ".join(t for t in m["texts"] if t).strip()
+        if text and 0 < mid < 256:
+            messages[mid] = text[:80]
+    return procs, messages
 
 
 def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
@@ -955,7 +992,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 
     # Doors: a PROCESS proc that moves cells owns those cells. Each door's cells get their
     # own sectors (never merged with neighbours), so the ceiling can move independently.
-    procs = load_door_procs(map_num)
+    procs, proc_messages = load_proc_defs(map_num)
     door_of_cell = {}
     for pid in sorted(procs):
         for c in procs[pid]['cells']:
@@ -965,7 +1002,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     for pid in sorted(procs):
         p = procs[pid]
         my_cells = sorted({c for c in p['cells'] if door_of_cell.get(c) == pid})
-        if my_cells or p['trig'] or p['unlocks']:
+        if my_cells or p['triggers'] or p['unlocks']:
             door_records.append((pid, p, my_cells))
 
     def cell_key(c):
@@ -1156,7 +1193,8 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
         if (int(fx), int(fy)) in visited:
             valid_items.append((itype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE)))
     # Ensure weapons, medkits, armor, ammo, and keys are available in the level
-    essential_items = [22, 23, 24, 25, 26, 17, 19, 21, 27, 28, 18, 20]
+    # Keys (27-29) are not added here: they only exist where the map places them.
+    essential_items = [22, 23, 24, 25, 26, 17, 19, 21, 18, 20]
     for idx_e, itype in enumerate(essential_items):
         if idx_e < len(sector_centers):
             cx, cy = sector_centers[(idx_e * 2 + 1) % len(sector_centers)]
@@ -1201,28 +1239,43 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     with open(ent_path, "wb") as f:
         f.write(ent_buf)
 
-    # doors{N}.bin: u16 count, then per record:
-    #   >BBBH  procId, key (0 none, 1 green, 2 red), locked, openCeil
-    #   >B     trigger count, then >BB cell x, y  (LinkSwitchAt cells)
-    #   >B     unlock count, then >B proc ids     (proc ids unlocked when this one fires)
-    #   >B     cell count, then >BBHH cell x, y, sectorId, openCeil (per cell)
-    door_buf = bytearray()
-    door_buf.extend(struct.pack(">H", len(door_records)))
+    # procs{N}.bin (big-endian):
+    #   >H proc count, then per proc:
+    #     >BBBHHBBB  id, key (0 none,1 green,2 red,3 blue), flags (1 locked, 2 checkback, 4 toggle),
+    #                startdelay (tenths of a second), backwait (tenths), speed, onmsg, lockmsg
+    #     >B trigger count, then >BBB kind (0 link,1 floor,2 return,3 onofflink), x, y
+    #     >B unlock count, then >B proc ids
+    #     >B cell count, then >BBHH per cell: x, y, sectorId, openCeil (up cells: floor + H)
+    #   >B message count, then per message: >BB id, length, ASCII bytes
+    proc_buf = bytearray()
+    proc_buf.extend(struct.pack(">H", len(door_records)))
     for pid, p, my_cells in door_records:
-        key_kind = p['key']
-        door_buf.extend(struct.pack(">BBBH", pid & 0xFF, key_kind, 1 if p['locked'] else 0, 0))
-        door_buf.extend(struct.pack(">B", len(p['trig'])))
-        for tx, ty in p['trig']:
-            door_buf.extend(struct.pack(">BB", tx & 0xFF, ty & 0xFF))
-        door_buf.extend(struct.pack(">B", len(p['unlocks'])))
+        flags = (1 if p['locked'] else 0) | (2 if p['checkback'] else 0) | (4 if p['toggle'] else 0)
+        proc_buf.extend(struct.pack(">BBBHHBBB", pid & 0xFF, p['key'], flags,
+                                    min(65535, int(round(p['startdelay'] * 10))),
+                                    min(65535, int(round(p['backwait'] * 10))),
+                                    max(1, min(255, p['speed'])), p['onmsg'] & 0xFF, p['lockmsg'] & 0xFF))
+        proc_buf.extend(struct.pack(">B", len(p['triggers'])))
+        for kind, tx, ty in p['triggers']:
+            proc_buf.extend(struct.pack(">BBB", kind, tx & 0xFF, ty & 0xFF))
+        proc_buf.extend(struct.pack(">B", len(p['unlocks'])))
         for u in p['unlocks']:
-            door_buf.extend(struct.pack(">B", u & 0xFF))
-        door_buf.extend(struct.pack(">B", len(my_cells)))
+            proc_buf.extend(struct.pack(">B", u & 0xFF))
+        proc_buf.extend(struct.pack(">B", len(my_cells)))
         for cx, cy in my_cells:
             sid = cell_to_rect[(cx, cy)]
-            door_buf.extend(struct.pack(">BBHH", cx, cy, sid, sector_open_h[sid]))
-    with open(os.path.join(LEVELS_DIR, f"doors{level_idx}.bin"), "wb") as f:
-        f.write(door_buf)
+            if (cx, cy) in p['ups']:
+                open_h = rects[sid][5] + p['ups'][(cx, cy)]
+            else:
+                open_h = sector_open_h[sid]
+            proc_buf.extend(struct.pack(">BBHH", cx, cy, sid, open_h))
+    used_msgs = sorted({m for _, p, _ in door_records for m in (p['onmsg'], p['lockmsg']) if m})
+    proc_buf.extend(struct.pack(">B", len(used_msgs)))
+    for m in used_msgs:
+        text = proc_messages.get(m, "")[:80].encode("ascii", errors="replace")
+        proc_buf.extend(struct.pack(">BB", m, len(text)) + text)
+    with open(os.path.join(LEVELS_DIR, f"procs{level_idx}.bin"), "wb") as f:
+        f.write(proc_buf)
 
     info = c3d2_core.read_c3b(out_c3b)
     print(f"[OK] Level {level_idx} (MAP.{map_num:02d}): sectors={info['sectors']}, walls={info['walls']}, "

@@ -476,6 +476,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             g.drawString(world.hudMessage, scrW >> 1, topY + 1, Graphics.TOP | Graphics.HCENTER);
         }
 
+        // 4b. Key indicator in the top-right corner of the 3D view
+        drawKeyIndicators(g, topY);
+
         // 5. Draw Chasm bottom status bar HUD
         drawStatusBar(g, smallFont);
     }
@@ -620,9 +623,59 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             }
         }
 
-        // Draw player marker
+        // Player marker: a triangle pointing where the player faces. World forward is (sin, cos)
+        // in (x, z); the map's y axis points up, so screen direction is (sin, -cos).
+        int sinA = MathUtils.fastSin(world.playerBody.rotation) >> 10;   // about +-64
+        int cosA = MathUtils.fastCos(world.playerBody.rotation) >> 10;
+        int ux = sinA;
+        int uy = -cosA;
         g.setColor(0xFFFF44);
-        g.fillRect(cx - 2, cy - 2, 4, 4);
+        fillTriangle(g,
+                cx + (ux * 6) / 64, cy + (uy * 6) / 64,
+                cx + (-ux * 4 - uy * 3) / 64, cy + (-uy * 4 + ux * 3) / 64,
+                cx + (-ux * 4 + uy * 3) / 64, cy + (-uy * 4 - ux * 3) / 64);
+    }
+
+    /** Filled triangle by scanlines (MIDP 2.0 Graphics has no fillTriangle). */
+    private static void fillTriangle(Graphics g, int x0, int y0, int x1, int y1, int x2, int y2) {
+        int minY = Math.min(y0, Math.min(y1, y2));
+        int maxY = Math.max(y0, Math.max(y1, y2));
+        for (int y = minY; y <= maxY; y++) {
+            int xa = 0;
+            int xb = 0;
+            int hits = 0;
+            for (int e = 0; e < 3 && hits < 2; e++) {
+                int ax = e == 0 ? x0 : (e == 1 ? x1 : x2);
+                int ay = e == 0 ? y0 : (e == 1 ? y1 : y2);
+                int bx = e == 0 ? x1 : (e == 1 ? x2 : x0);
+                int by = e == 0 ? y1 : (e == 1 ? y2 : y0);
+                if (ay == by) continue;
+                if (y < Math.min(ay, by) || y > Math.max(ay, by)) continue;
+                int x = ax + (bx - ax) * (y - ay) / (by - ay);
+                if (hits == 0) xa = x; else xb = x;
+                hits++;
+            }
+            if (hits == 2) {
+                int l = Math.min(xa, xb);
+                g.fillRect(l, y, Math.abs(xb - xa) + 1, 1);
+            }
+        }
+    }
+
+    /** Key indicator in the top-right corner of the 3D view: green and red keys, lit when held. */
+    private void drawKeyIndicators(Graphics g, int topY) {
+        int x = viewW - 6;
+        // Right-to-left: red (rightmost) then green.
+        for (int k = 0; k < 2; k++) {
+            boolean held = k == 0 ? world.hasRedKey : world.hasGreenKey;
+            x -= 14;
+            int y = topY + 3;
+            g.setColor(held ? (k == 0 ? 0xDD3322 : 0x33DD44) : 0x202420);
+            g.fillRect(x, y, 12, 12);
+            g.setColor(held ? 0xFFFFFF : 0x556655);
+            g.drawRect(x, y, 11, 11);
+            g.drawString(k == 0 ? "R" : "G", x + 6, y + 1, Graphics.TOP | Graphics.HCENTER);
+        }
     }
 
     private void drawPauseOverlay(Graphics g) {
@@ -680,19 +733,19 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.drawString("CONTROLS & HELP", scrW >> 1, 12, Graphics.TOP | Graphics.HCENTER);
 
         String[] keys = {
-            "2 / 8", "4 / 6", "1 / 3", "5", "7", "9", "* / #", "0", "SOFT"
+            "2 / 8", "4 / 6", "1 / 3", "5", "9", "* / #", "0", "SOFT"
         };
         String[] acts = {
             "Forward / back",
             "Turn left / right",
             "Strafe left / right",
             "Fire & dismember",
-            "Use / open / next level",
             "Level map (toggle)",
             "Previous / next weapon",
             "Jump",
             "Pause menu"
         };
+        // Doors, gates, switches and the level exit open on touch: there is no use key.
         g.setFont(plain);
         int y = 36;
         for (int i = 0; i < keys.length; i++) {
@@ -809,7 +862,6 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             case KEY_NUM1: kStrafeL = true; break;
             case KEY_NUM3: kStrafeR = true; break;
             case KEY_NUM5: kFire = true; break;
-            case KEY_NUM7: world.interactOrNextLevel(); break;
             case KEY_NUM9: showAutomap = !showAutomap; break;
             case KEY_NUM0: world.triggerJump(); break;
             case KEY_STAR: world.switchWeapon(-1); break;

@@ -6,10 +6,10 @@ Structure:
   #stopani N                  (global)
   #mess N ... #end            message definitions (TextA/TextB/... lines, Delay)
   #proc N ... #action ... #end
-      header keys: StartDelay, BackWait, EndDelay, Speed, SfxId, SfxPosxy,
-                   Lock, LockMessage, CheckBack, LightRemap, GreenKey,
-                   LinkSwitchAt x y, OnMessage N
-      actions:     move x y dz dx | rotate x y a b c | up x y v | light x y ...
+      header keys: StartDelay, BackWait (seconds), EndDelay, Speed, SfxId, SfxPosxy,
+                   Lock, Greenlock/Redlock/Bluelock, GreenKey/RedKey/BlueKey, LockMessage,
+                   CheckBack, LightRemap, LinkSwitchAt x y, OnMessage N, FirstMessage N
+      actions:     move X Y dX dY (also xmove/ymove) | rotate X Y dX dY Fi | up X Y H | light X Y ...
                    unlock N | playani N | ...
 
 Usage:  python3 tools/parse_process.py <PROCESS.XX bytes file> [...]
@@ -17,6 +17,10 @@ Usage:  python3 tools/parse_process.py <PROCESS.XX bytes file> [...]
 """
 import re
 import sys
+
+
+# Link kinds from the editor manual (CSM_EDIT.TXT): proximity, step-on, shoot, return, toggle, destroy.
+LINK_KINDS = ('link', 'floor', 'shoot', 'return', 'onofflink', 'destroy')
 
 
 def _clean(line):
@@ -31,10 +35,11 @@ def parse_process(data):
     procs = {}
     messages = {}
     stop_anims = []
+    links = []          # (kind, x, y, proc_id) from the #links section
     lines = text.replace('\r', '').split('\n')
     i = 0
     cur = None          # current block dict
-    kind = None         # 'proc' | 'mess'
+    kind = None         # 'proc' | 'mess' | 'links'
     in_action = False
     while i < len(lines):
         raw = lines[i]
@@ -43,6 +48,21 @@ def parse_process(data):
         if not line:
             continue
         low = line.lower()
+        if low.startswith('#links'):
+            kind = 'links'
+            cur = None
+            continue
+        if kind == 'links':
+            if low.startswith('#end'):
+                kind = None
+                continue
+            parts = line.split()
+            if len(parts) >= 4 and parts[0].lower() in LINK_KINDS:
+                try:
+                    links.append((parts[0].lower(), int(parts[1]), int(parts[2]), int(parts[3])))
+                except ValueError:
+                    pass
+            continue
         if low.startswith('#stopani'):
             parts = line.split()
             if len(parts) > 1:
@@ -85,7 +105,8 @@ def parse_process(data):
         parts = line.split()
         key = parts[0].lower()
         args = [_num(p) for p in parts[1:]]
-        if key in ('lock', 'checkback', 'lightremap', 'greenkey'):
+        if key in ('lock', 'checkback', 'lightremap', 'greenkey', 'redkey', 'bluekey',
+                   'greenlock', 'redlock', 'bluelock', 'checkgo', 'mortal'):
             cur['header'][key] = True
         elif key in ('startdelay', 'backwait', 'enddelay', 'speed', 'sfxid',
                      'lockmessage', 'onmessage'):
@@ -96,7 +117,7 @@ def parse_process(data):
             cur['header'][key] = tuple(args[:2])
         else:
             cur['header'][key] = args
-    return {'procs': procs, 'messages': messages, 'stop_anims': stop_anims}
+    return {'procs': procs, 'messages': messages, 'stop_anims': stop_anims, 'links': links}
 
 
 def _num(tok):

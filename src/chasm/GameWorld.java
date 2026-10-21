@@ -359,29 +359,58 @@ public final class GameWorld {
         }
     }
 
-    // ==================== Doors, Switches & Keys (PROCESS.XX) ====================
-    public static final int MAX_DOORS = 16;
-    public static final int DOOR_STATE_CLOSED  = 0;
-    public static final int DOOR_STATE_OPENING = 1;
-    public static final int DOOR_STATE_OPEN    = 2;
-    /** Ceiling units a door moves per tick while opening. */
-    public static final int DOOR_SPEED = 3;
+    // ==================== Doors, Gates, Switches & Keys (PROCESS.XX) ====================
+    // Nothing needs a use key: a proc is activated by touch. Activation follows the original engine
+    // (Chasm-Reverse map.cpp, ProcedureProcess*): it runs only when the proc is unlocked, or when the
+    // key it needs is held. 'Lock' is removed by an 'unlock' action from another proc.
+    public static final int MAX_PROCS = 40;
+    public static final int TRIG_LINK = 0;       // proximity (3x3 cells)
+    public static final int TRIG_FLOOR = 1;      // stepped on (the cell itself)
+    public static final int TRIG_RETURN = 2;     // resets the proc to its start state
+    public static final int TRIG_ONOFF = 3;      // proximity; a second touch closes it
+    private static final int PROC_LOCKED = 1;
+    private static final int PROC_CHECKBACK = 2;
+    private static final int PROC_TOGGLE = 4;
+    private static final int DSTATE_IDLE = 0;
+    private static final int DSTATE_DELAY = 1;
+    private static final int DSTATE_OPENING = 2;
+    private static final int DSTATE_OPEN = 3;
+    private static final int DSTATE_CLOSING = 4;
+    private static final int STAGE_ONE = 256;
+    /** Original engine ran about this many game ticks per second (ChasmCanvas ~28 FPS). */
+    private static final int TICKS_PER_SECOND = 28;
     /** Cell size in world units; matches the compiler's SCALE. */
     private static final int CELL_UNITS = 96;
+    /** Closed door/gate ceiling sits this far above the floor (below the 50-unit clearance). */
+    private static final int DOOR_CLOSED_GAP = 16;
 
-    public int doorCount = 0;
-    private final int[] doorProc = new int[MAX_DOORS];
-    private final int[] doorKey = new int[MAX_DOORS];
-    private final boolean[] doorLocked = new boolean[MAX_DOORS];
-    private final int[] doorState = new int[MAX_DOORS];
-    private final int[][] doorTrig = new int[MAX_DOORS][];   // switch cells: x, y pairs
-    private final int[][] doorUnlock = new int[MAX_DOORS][]; // proc ids unlocked by this proc
-    private final int[][] doorCell = new int[MAX_DOORS][];   // door cells: x, y, sector, openCeil
+    public int procCount = 0;
+    private final int[] procId = new int[MAX_PROCS];
+    private final int[] procKey = new int[MAX_PROCS];       // 0 none, 1 green, 2 red, 3 blue
+    private final int[] procFlags = new int[MAX_PROCS];
+    private final int[] procDelay = new int[MAX_PROCS];     // ticks before opening
+    private final int[] procBackWait = new int[MAX_PROCS];  // ticks open before returning; 0 = never
+    private final int[] procSpeed = new int[MAX_PROCS];
+    private final int[] procOnMsg = new int[MAX_PROCS];
+    private final int[] procLockMsg = new int[MAX_PROCS];
+    private final int[] procState = new int[MAX_PROCS];
+    private final int[] procTimer = new int[MAX_PROCS];
+    private final int[] procStage = new int[MAX_PROCS];     // 0 closed .. STAGE_ONE open
+    private final int[][] procTrig = new int[MAX_PROCS][];     // kind, x, y triples
+    private final boolean[][] procTrigIn = new boolean[MAX_PROCS][];
+    private final int[][] procUnlock = new int[MAX_PROCS][];
+    private final int[][] procCell = new int[MAX_PROCS][];     // x, y, sectorId, openCeil quads
+    private final String[] procMsg = new String[256];
     public boolean hasGreenKey = false;
     public boolean hasRedKey = false;
+    public boolean hasBlueKey = false;
+    /** Level exit point in world units (16.16 is applied when used). */
+    private int exitX = 0;
+    private int exitZ = 0;
 
-    private void loadDoorsSidecar(String path) {
-        doorCount = 0;
+    private void loadProcsSidecar(String path) {
+        procCount = 0;
+        for (int i = 0; i < procMsg.length; i++) procMsg[i] = null;
         try {
             InputStream is = GameWorld.class.getResourceAsStream(path);
             if (is == null) return;
@@ -390,10 +419,14 @@ public final class GameWorld {
             for (int i = 0; i < n; i++) {
                 int pid = dis.readUnsignedByte();
                 int key = dis.readUnsignedByte();
-                int locked = dis.readUnsignedByte();
-                dis.readUnsignedShort(); // reserved
+                int flags = dis.readUnsignedByte();
+                int delay = dis.readUnsignedShort();
+                int back = dis.readUnsignedShort();
+                int speed = dis.readUnsignedByte();
+                int onMsg = dis.readUnsignedByte();
+                int lockMsg = dis.readUnsignedByte();
                 int tc = dis.readUnsignedByte();
-                int[] trig = new int[tc * 2];
+                int[] trig = new int[tc * 3];
                 for (int t = 0; t < trig.length; t++) trig[t] = dis.readUnsignedByte();
                 int uc = dis.readUnsignedByte();
                 int[] unl = new int[uc];
@@ -406,19 +439,35 @@ public final class GameWorld {
                     cells[c * 4 + 2] = dis.readUnsignedShort();
                     cells[c * 4 + 3] = dis.readUnsignedShort();
                 }
-                if (i >= MAX_DOORS) continue;
-                doorProc[doorCount] = pid;
-                doorKey[doorCount] = key;
-                doorLocked[doorCount] = locked != 0;
-                doorState[doorCount] = DOOR_STATE_CLOSED;
-                doorTrig[doorCount] = trig;
-                doorUnlock[doorCount] = unl;
-                doorCell[doorCount] = cells;
-                doorCount++;
+                if (procCount >= MAX_PROCS) continue;
+                int k = procCount++;
+                procId[k] = pid;
+                procKey[k] = key;
+                procFlags[k] = flags;
+                procDelay[k] = delay * TICKS_PER_SECOND / 10;
+                procBackWait[k] = back * TICKS_PER_SECOND / 10;
+                procSpeed[k] = speed;
+                procOnMsg[k] = onMsg;
+                procLockMsg[k] = lockMsg;
+                procState[k] = DSTATE_IDLE;
+                procTimer[k] = 0;
+                procStage[k] = 0;
+                procTrig[k] = trig;
+                procTrigIn[k] = new boolean[tc];
+                procUnlock[k] = unl;
+                procCell[k] = cells;
+            }
+            int mc = dis.readUnsignedByte();
+            for (int m = 0; m < mc; m++) {
+                int id = dis.readUnsignedByte();
+                int len = dis.readUnsignedByte();
+                byte[] text = new byte[len];
+                dis.readFully(text);
+                if (id > 0) procMsg[id] = new String(text, "US-ASCII");
             }
             dis.close();
         } catch (Exception e) {
-            doorCount = 0;
+            procCount = 0;
         }
     }
 
@@ -434,91 +483,167 @@ public final class GameWorld {
         return Math.abs(x - cx) <= 1 && Math.abs(y - cz) <= 1;
     }
 
-    /** True when a switch cell of record d is next to the player. */
-    private boolean switchNear(int d, int cx, int cz) {
-        int[] trig = doorTrig[d];
-        for (int t = 0; t < trig.length; t += 2) {
-            if (cellNear(trig[t], trig[t + 1], cx, cz)) return true;
+    private int procIndex(int pid) {
+        for (int p = 0; p < procCount; p++) {
+            if (procId[p] == pid) return p;
         }
+        return -1;
+    }
+
+    private boolean hasKey(int k) {
+        if (k == 1) return hasGreenKey;
+        if (k == 2) return hasRedKey;
+        if (k == 3) return hasBlueKey;
         return false;
     }
 
-    /** True when one of record d's own door cells is next to the player. */
-    private boolean doorCellNear(int d, int cx, int cz) {
-        int[] cells = doorCell[d];
+    /** The engine's test: a keyed proc needs its key; an unkeyed proc needs to be unlocked. */
+    private boolean canOpen(int p) {
+        if (procKey[p] == 0) return (procFlags[p] & PROC_LOCKED) == 0;
+        return hasKey(procKey[p]);
+    }
+
+    private boolean playerInProcCells(int p, int cx, int cz) {
+        int[] cells = procCell[p];
         for (int c = 0; c < cells.length; c += 4) {
-            if (cellNear(cells[c], cells[c + 1], cx, cz)) return true;
+            if (cells[c] == cx && cells[c + 1] == cz) return true;
         }
         return false;
     }
 
     /**
-     * Uses the switch or door next to the player. Switches are checked first, so a switch
-     * that happens to sit beside another door's cells still wins. Returns true when one was found.
+     * Handles one touch. Returns false when the proc refused (locked, no key), so the caller
+     * keeps checking while the player stays in range (a key picked up nearby then opens it).
      */
-    private boolean useDoorsNearPlayer() {
+    private boolean triggerProc(int p, int kind) {
+        int st = procState[p];
+        boolean active = st == DSTATE_DELAY || st == DSTATE_OPENING || st == DSTATE_OPEN;
+        if (kind == TRIG_RETURN) {
+            if (active) procState[p] = DSTATE_CLOSING;
+            return true;
+        }
+        if (kind == TRIG_ONOFF && active && (procFlags[p] & PROC_TOGGLE) != 0) {
+            procState[p] = DSTATE_CLOSING;
+            return true;
+        }
+        if (!canOpen(p)) {
+            int lm = procLockMsg[p];
+            if (lm != 0 && procMsg[lm] != null) {
+                setMessage(procMsg[lm], 40);
+            } else if (procKey[p] != 0) {
+                setMessage(procKey[p] == 1 ? "LOCKED - NEED GREEN KEY"
+                        : (procKey[p] == 2 ? "LOCKED - NEED RED KEY" : "LOCKED - NEED BLUE KEY"), 40);
+            }
+            return false;
+        }
+        int om = procOnMsg[p];
+        if (om != 0 && procMsg[om] != null) setMessage(procMsg[om], 60);
+        int[] unl = procUnlock[p];
+        for (int u = 0; u < unl.length; u++) {
+            int q = procIndex(unl[u]);
+            if (q >= 0) procFlags[q] &= ~PROC_LOCKED;
+        }
+        if (active) {
+            if (st == DSTATE_OPEN && procBackWait[p] > 0) procTimer[p] = procBackWait[p];
+            return true;
+        }
+        if (procCell[p].length > 0) {
+            procState[p] = procDelay[p] > 0 ? DSTATE_DELAY : DSTATE_OPENING;
+            procTimer[p] = procDelay[p];
+        }
+        return true;
+    }
+
+    /** Sets the ceilings of a proc's cells for its current stage (closed = floor + gap). */
+    private void applyProc(int p) {
+        int[] cells = procCell[p];
+        for (int c = 0; c < cells.length; c += 4) {
+            int sid = cells[c + 2];
+            if (sectors == null || sid < 0 || sid >= sectors.length) continue;
+            SectorData sd = sectors[sid];
+            int closed = sd.floorHeight + DOOR_CLOSED_GAP;
+            int open = Math.max(closed, cells[c + 3]);
+            sd.ceilingHeight = (short) (closed + (open - closed) * procStage[p] / STAGE_ONE);
+        }
+    }
+
+    private void advanceProc(int p, int cx, int cz) {
+        int st = procState[p];
+        if (st == DSTATE_IDLE) return;
+        boolean blocked = playerInProcCells(p, cx, cz);
+        int step = Math.max(4, Math.min(64, procSpeed[p] * 3));
+        switch (st) {
+            case DSTATE_DELAY:
+                if (--procTimer[p] <= 0) procState[p] = DSTATE_OPENING;
+                break;
+            case DSTATE_OPENING:
+                procStage[p] = Math.min(STAGE_ONE, procStage[p] + step);
+                applyProc(p);
+                if (procStage[p] >= STAGE_ONE) {
+                    procState[p] = DSTATE_OPEN;
+                    procTimer[p] = procBackWait[p];
+                }
+                break;
+            case DSTATE_OPEN:
+                if (procBackWait[p] > 0 && --procTimer[p] <= 0) {
+                    // Never close on the player: wait until the cells are clear.
+                    if (blocked) procTimer[p] = 1;
+                    else procState[p] = DSTATE_CLOSING;
+                }
+                break;
+            case DSTATE_CLOSING:
+                if (blocked) {
+                    procState[p] = DSTATE_OPEN;
+                    procTimer[p] = 1;
+                    break;
+                }
+                procStage[p] = Math.max(0, procStage[p] - step);
+                applyProc(p);
+                if (procStage[p] == 0) procState[p] = DSTATE_IDLE;
+                break;
+            default:
+                break;
+        }
+    }
+
+    /** Runs once per game tick: touch triggers, then the movement of every proc. */
+    private void updateProcs() {
+        if (sectors == null) return;
         int cx = cellOf(playerBody.x);
         int cz = cellOf(playerBody.z);
-        for (int d = 0; d < doorCount; d++) {
-            if (doorTrig[d].length > 0 && switchNear(d, cx, cz)) {
-                fireDoor(d);
-                return true;
-            }
-        }
-        for (int d = 0; d < doorCount; d++) {
-            if (doorTrig[d].length == 0 && doorCellNear(d, cx, cz)) {
-                fireDoor(d);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void fireDoor(int d) {
-        if (doorLocked[d]) {
-            int k = doorKey[d];
-            if ((k == 1 && hasGreenKey) || (k == 2 && hasRedKey)) {
-                doorLocked[d] = false;
-                setMessage(k == 1 ? "GREEN DOOR UNLOCKED" : "RED DOOR UNLOCKED", 40);
-            } else {
-                setMessage(k == 1 ? "LOCKED - NEED GREEN KEY" : (k == 2 ? "LOCKED - NEED RED KEY" : "LOCKED"), 40);
-                return;
-            }
-        }
-        if (doorCell[d].length > 0 && doorState[d] == DOOR_STATE_CLOSED) {
-            doorState[d] = DOOR_STATE_OPENING;
-        }
-        int[] unl = doorUnlock[d];
-        for (int u = 0; u < unl.length; u++) unlockDoorProc(unl[u]);
-    }
-
-    private void unlockDoorProc(int pid) {
-        for (int d = 0; d < doorCount; d++) {
-            if (doorProc[d] == pid) doorLocked[d] = false;
-        }
-    }
-
-    /** Raises each opening door's sector ceilings toward their open height, DOOR_SPEED per tick. */
-    private void updateDoors() {
-        if (sectors == null) return;
-        for (int d = 0; d < doorCount; d++) {
-            if (doorState[d] != DOOR_STATE_OPENING) continue;
-            int[] cells = doorCell[d];
-            boolean done = true;
-            for (int c = 0; c < cells.length; c += 4) {
-                int sid = cells[c + 2];
-                if (sid < 0 || sid >= sectors.length) continue;
-                SectorData sd = sectors[sid];
-                int target = cells[c + 3];
-                int h = sd.ceilingHeight;
-                if (h < target) {
-                    h += DOOR_SPEED;
-                    if (h > target) h = target;
-                    sd.ceilingHeight = (short) h;
-                    if (h < target) done = false;
+        for (int p = 0; p < procCount; p++) {
+            int[] tr = procTrig[p];
+            boolean[] in = procTrigIn[p];
+            for (int t = 0; t < in.length; t++) {
+                int kind = tr[t * 3];
+                int x = tr[t * 3 + 1];
+                int y = tr[t * 3 + 2];
+                boolean inside = kind == TRIG_FLOOR ? (cx == x && cz == y) : cellNear(x, y, cx, cz);
+                if (!inside) {
+                    in[t] = false;
+                } else if (!in[t]) {
+                    // Remember the touch only when the proc accepted it; a refused touch is retried
+                    // on the next tick while the player stays in range.
+                    in[t] = triggerProc(p, kind);
                 }
             }
-            if (done) doorState[d] = DOOR_STATE_OPEN;
+        }
+        for (int p = 0; p < procCount; p++) advanceProc(p, cx, cz);
+    }
+
+    /** The level ends when every enemy is down and the player reaches the exit point. */
+    private void updateLevelExit() {
+        int alive = 0;
+        for (int i = 0; i < monCount; i++) {
+            if (monState[i] != MSTATE_INACTIVE && monState[i] != MSTATE_DEAD) alive++;
+        }
+        boolean near = Math.abs((playerBody.x - (exitX << 16)) >> 16) < CELL_UNITS
+                && Math.abs((playerBody.z - (exitZ << 16)) >> 16) < CELL_UNITS;
+        if (!near) return;
+        if (alive == 0) {
+            levelCompleted = true;
+        } else if (hudMessageTimer <= 0) {
+            setMessage("SECTOR NOT CLEAR", 30);
         }
     }
 
@@ -555,9 +680,10 @@ public final class GameWorld {
         loadEntitiesSidecar(entPath);
 
         // Doors, switches and keys are per level; the player starts each level without keys
-        loadDoorsSidecar("/levels/doors" + (levelIndex + 1) + ".bin");
+        loadProcsSidecar("/levels/procs" + (levelIndex + 1) + ".bin");
         hasGreenKey = false;
         hasRedKey = false;
+        hasBlueKey = false;
 
         setMessage(LEVEL_NAMES[levelIndex], 45);
     }
@@ -572,8 +698,8 @@ public final class GameWorld {
             int spawnX = dis.readShort();
             int spawnZ = dis.readShort();
             int spawnAng4096 = dis.readShort() & 4095;
-            int exitX = dis.readShort();
-            int exitZ = dis.readShort();
+            this.exitX = dis.readShort();
+            this.exitZ = dis.readShort();
 
             this.playerBody.x = spawnX << 16;
             this.playerBody.z = spawnZ << 16;
@@ -865,6 +991,11 @@ public final class GameWorld {
                 if (itemModelId[i] == 28) {
                     hasGreenKey = true;
                     setMessage("GREEN KEY", 30);
+                    continue;
+                }
+                if (itemModelId[i] == 29) {
+                    hasBlueKey = true;
+                    setMessage("BLUE KEY", 30);
                     continue;
                 }
                 int t = itemType[i] % 8;
@@ -1168,20 +1299,6 @@ public final class GameWorld {
         setMessage("SECTOR CLEAR! PRESS * FOR NEXT LEVEL", 90);
     }
 
-    /** '*' key: use. Clears the level once every enemy is down; doors are not in the portal data yet. */
-    public void interactOrNextLevel() {
-        if (useDoorsNearPlayer()) return;
-        int alive = 0;
-        for (int i = 0; i < monCount; i++) {
-            if (monState[i] != MSTATE_INACTIVE && monState[i] != MSTATE_DEAD) alive++;
-        }
-        if (alive == 0) {
-            levelCompleted = true;
-            return;
-        }
-        setMessage("NOTHING TO USE HERE - CLEAR THE SECTOR", 40);
-    }
-
     /** '0' key: jump. */
     public void triggerJump() {
         if (jumpOffset == 0 && jumpVel == 0) {
@@ -1215,7 +1332,8 @@ public final class GameWorld {
         updateDetachedLimbs();
         updateProjectiles();
         updateMonsters();
-        updateDoors();
+        updateProcs();
+        updateLevelExit();
     }
 
     private void updateDetachedLimbs() {

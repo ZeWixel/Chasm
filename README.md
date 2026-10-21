@@ -42,8 +42,7 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 | 4 / 6 | Turn left / right |
 | 1 / 3 | Strafe left / right |
 | 5 | Fire |
-| 7 | Use: open switches and doors next to you, go through the exit once the sector is clear |
-| 9 | Level map (automap) toggle |
+| 9 | Level map (automap) toggle; the player is a triangle pointing where you face |
 | * / # | Previous / next weapon |
 | 0 | Jump |
 | Left soft key | Pause menu |
@@ -79,24 +78,38 @@ A hit flashes the enemy with an additive red glow for a few ticks instead of ove
 
 Static 3D props (explosive barrels, pharaoh statues, obelisks) block movement through simplified axis-aligned boxes. Each box's half-extents are the largest horizontal vertex offsets of the model, scaled with the renderer's model-to-world factor, and are stored in the entity sidecar (`>BhhBhh` per prop). The player is pushed out along the axis of least penetration. Monsters are pushed out the same way when they spawn or update inside a box, so a spawn on top of a barrel is recoverable. A chasing monster that is blocked by a box detours around it on one side for a fixed number of ticks, which avoids oscillating at the corner. Projectiles and line of sight still ignore props.
 
-## Doors, switches and keys
+## Doors, gates, switches and keys
 
-The `PROCESS.XX` script of each map is compiled by `tools/build_assets.py` into `res/levels/doors{N}.bin`. Each record is one proc that moves cells (a door), a switch cell (`linkswitchat`), or an `unlock N` link to another proc.
+There is no use key. Doors, gates, switches and the exit work on touch, as in the original game. `tools/build_assets.py` compiles each map's `PROCESS.XX` (parsed by `tools/parse_process.py`, including the `#links` section) into `res/levels/procs{N}.bin`.
 
-- **Doors** are sectors whose ceiling starts 16 units above the floor, so they block the player. Using a door opens it: its ceiling rises to the open height at 3 units per tick.
-- **Switches** are used from the adjacent cell. Switches are checked before doors, so a switch next to another door's cells fires first. When a switch fires, its `unlock` targets lose their lock.
-- **Locked doors**: a door is locked when its header has `lock` or a `greenkey`/`redkey` requirement. Without the key it shows `LOCKED`; a green or red key picked up on the level opens the matching door.
-- **Keys** are items 28 (green) and 27 (red). They are carried per level and reset when a level loads.
+- **Triggers** (from `#links` and `LinkSwitchAt`): `link` fires when the player comes within one cell (3x3 block), `floor` when the player steps on the cell, `onofflink` the same as `link` but a second touch closes the proc, and `return` resets the proc to its start state.
+- **Activation** follows the original engine (`Chasm-Reverse`, `ProcedureProcess*`). A proc runs only if it is unlocked, or if the key it needs (green, red or blue) is held. `Lock` is removed by an `unlock N` action from another proc. A refused touch is retried every tick while the player stays in range, so a key picked up nearby opens the door.
+- **Doors** are sectors whose ceiling sits 16 units above the floor (closed, below the 50-unit clearance) and rises to the open height. `StartDelay` and `BackWait` are in seconds (converted at 28 ticks per second). `BackWait 0` means the door never returns. A door never closes on the player: it waits until the player leaves its cells.
+- **Gates** (`up X Y H`) raise a transparent wall by H, so the cell opens to floor + H.
+- **Keys** are items 27 (red), 28 (green) and 29 (blue). The HUD shows the green and red keys in the top-right corner of the 3D view. The blue key is collected but has no HUD slot yet.
+- **Exit**: when every enemy is down, walking to the level's exit point completes the level. Nothing else needs to be pressed.
 
-Not implemented yet: `up`, `rotate`, `light`, `playani`, `waitout` and the lift and move actions beyond the door cells. Those are parsed but ignored, so a door or lift that needs them behaves as a plain door.
+Not implemented: `destroy` links (shooting an object to open a proc, for example `MAP.01` proc 1 at (22,55), so that door stays shut), `shoot` links, moving 3O models (`move` on a model cell, the lifts of the original), `rotate`, `light`, `playani`, `waitout`, `death`. These are parsed and ignored.
 
-Each level now compiles its whole walkable area instead of the first 220 cells, so levels 1–3 have 151, 88 and 231 sectors. The larger geometry is the reason keys and doors behind the first room work.
+Each level compiles its whole walkable area, so levels 1–3 have 156, 92 and 254 sectors.
+
+## Levels
+
+The `CSM.BIN` used by this build has four maps: `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99`. `MAP.99` is the briefing background, so it is not a level. The playable levels are:
+
+| Level | Map | Name (from `RESOURCE`) |
+|---|---|---|
+| 1 | MAP.01 | Power Station |
+| 2 | MAP.05 | Around Pyramids |
+| 3 | MAP.06 | Pyramid of Shmuher |
+
+The first build (`b8d28e9`) had four levels in `res/map1..map4.bin`. Levels 1–3 there came from the same maps, but with steps and walls that were added by hand (`add_engineered_steps_and_walls`), and level 4 was a hand-made layout (`build_level4_sanctum`, "Time Chasm Sanctum"), not game data. They are not in this build yet.
 
 ## Known limitations
 
 - **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels here. Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
 
-- Only doors, switches, keys and `unlock` chains are executed from `PROCESS.XX`. Lifts (`up`), rotating parts, lights, animations, messages and `death` triggers are not.
+- Only links (proximity, floor, toggle, return), `unlock` chains, doors and gates (`up`) are executed from `PROCESS.XX`. Shot-to-open (`destroy`, `shoot`), moving 3O platforms, rotating parts, lights and animations are not.
 - The full-area geometry has not been measured on a device. Frame rate and memory with 150–230 sectors are unknown.
 - Some portal walls still show angle-dependent distortion; the root cause has not been isolated.
 - Transparent grate textures are drawn as opaque (no masked mid-texture pass yet).
