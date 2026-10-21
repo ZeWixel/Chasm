@@ -14,6 +14,9 @@ public final class UiAssets {
     public static int[] tile;
     public static int hudW, hudH;
     public static int[] hud;
+    /** 16x16 status icons from /hud_icons.bin: HP (marine face), AR (armour ring), AMMO (shells). */
+    public static final int ICON_SIZE = 16;
+    public static int[] iconHp, iconAr, iconAmmo;
 
     private static boolean loaded = false;
 
@@ -23,6 +26,7 @@ public final class UiAssets {
         if (loaded) return;
         loaded = true;
         int[] pal = loadPalette();
+        loadIcons(pal);
         InputStream is = null;
         try {
             is = UiAssets.class.getResourceAsStream("/ui.bin");
@@ -41,6 +45,32 @@ public final class UiAssets {
             logo = null;
             tile = null;
             hud = null;
+        } finally {
+            if (is != null) {
+                try { is.close(); } catch (Exception ex) {}
+            }
+        }
+    }
+
+    private static void loadIcons(int[] pal) {
+        InputStream is = null;
+        try {
+            is = UiAssets.class.getResourceAsStream("/hud_icons.bin");
+            if (is == null) return;
+            DataInputStream dis = new DataInputStream(is);
+            int[][] out = new int[3][];
+            for (int k = 0; k < 3; k++) {
+                int w = dis.readUnsignedShort();
+                int h = dis.readUnsignedShort();
+                out[k] = readImage(dis, w * h, pal);
+            }
+            iconHp = out[0];
+            iconAr = out[1];
+            iconAmmo = out[2];
+        } catch (Exception e) {
+            iconHp = null;
+            iconAr = null;
+            iconAmmo = null;
         } finally {
             if (is != null) {
                 try { is.close(); } catch (Exception ex) {}

@@ -466,11 +466,13 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         // 4. Draw top HUD message banner if active
         Font smallFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
         g.setFont(smallFont);
+        // 4a. Developer overlay (coords / FPS / LIMBS) pushes the message banner down
+        int topY = world.devMode ? drawDevBar(g, smallFont) : 0;
         if (world.hudMessageTimer > 0 && world.hudMessage != null) {
             g.setColor(0x101410);
-            g.fillRect(0, 0, scrW, 16);
+            g.fillRect(0, topY, scrW, 16);
             g.setColor(0xFFE066);
-            g.drawString(world.hudMessage, scrW >> 1, 1, Graphics.TOP | Graphics.HCENTER);
+            g.drawString(world.hudMessage, scrW >> 1, topY + 1, Graphics.TOP | Graphics.HCENTER);
         }
 
         // 5. Draw Chasm bottom status bar HUD
@@ -478,35 +480,97 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     }
 
     private void drawStatusBar(Graphics g, Font font) {
+        UiAssets.ensureLoaded();
         int barY = viewH;
         g.setColor(0x1C201C);
         g.fillRect(0, barY, scrW, hudH);
         g.setColor(0x786434);
         g.drawRect(0, barY, scrW - 1, hudH - 1);
-        g.drawLine(scrW / 3, barY, scrW / 3, barY + hudH);
-        g.drawLine((scrW * 2) / 3, barY, (scrW * 2) / 3, barY + hudH);
-
+        int b1 = scrW / 3;
+        int b2 = (scrW * 2) / 3;
+        g.drawLine(b1, barY, b1, barY + hudH);
+        g.drawLine(b2, barY, b2, barY + hudH);
         g.setFont(font);
 
-        // Left box: HP & Armor
+        // Two rows: with 16px icons on a 32px strip, otherwise text-only rows.
+        boolean icons = hudH >= 32 && UiAssets.iconHp != null;
+        int rowA = icons ? barY : barY + 2;
+        int rowB = icons ? barY + 16 : barY + 14;
+        int fh = font.getHeight();
+        int textOff = icons ? (16 - fh) >> 1 : 0;
+
+        // Left box: HP and armour
+        int lx = icons ? 19 : 6;
         g.setColor(world.health <= 25 ? 0xFF4444 : 0xFFCC44);
-        g.drawString("HP:" + world.health, 6, barY + 2, Graphics.TOP | Graphics.LEFT);
+        if (icons) g.drawRGB(UiAssets.iconHp, 0, 16, 2, rowA, 16, 16, true);
+        g.drawString(icons ? String.valueOf(world.health) : "HP:" + world.health,
+                lx, rowA + textOff, Graphics.TOP | Graphics.LEFT);
         g.setColor(0x88CCFF);
-        g.drawString("AR:" + world.armor, 6, barY + 16, Graphics.TOP | Graphics.LEFT);
+        if (icons) g.drawRGB(UiAssets.iconAr, 0, 16, 2, rowB, 16, 16, true);
+        g.drawString(icons ? String.valueOf(world.armor) : "AR:" + world.armor,
+                lx, rowB + textOff, Graphics.TOP | Graphics.LEFT);
 
-        // Center box: Active Weapon & Ammo
+        // Centre box: weapon name and ammo
+        int cx = scrW >> 1;
         g.setColor(0xFFE066);
-        g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], scrW >> 1, barY + 2, Graphics.TOP | Graphics.HCENTER);
+        g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], cx, rowA + (icons ? textOff : 0),
+                Graphics.TOP | Graphics.HCENTER);
+        String ammoStr = icons ? String.valueOf(world.ammo[world.curWeapon])
+                               : "AMMO:" + world.ammo[world.curWeapon];
         g.setColor(0xD8D8C8);
-        g.drawString("AMMO:" + world.ammo[world.curWeapon], scrW >> 1, barY + 16, Graphics.TOP | Graphics.HCENTER);
+        if (icons) {
+            int total = 16 + 4 + font.stringWidth(ammoStr);
+            int ax = cx - (total >> 1);
+            g.drawRGB(UiAssets.iconAmmo, 0, 16, ax, rowB, 16, 16, true);
+            g.drawString(ammoStr, ax + 20, rowB + textOff, Graphics.TOP | Graphics.LEFT);
+        } else {
+            g.drawString(ammoStr, cx, rowB, Graphics.TOP | Graphics.HCENTER);
+        }
 
-        // Right box: Dismembered Limbs & FPS / Shading
-        int rx = (scrW * 2) / 3 + 5;
-        g.setColor(0xFF7755);
-        g.drawString("LIMBS:" + world.limbsSevered, rx, barY + 2, Graphics.TOP | Graphics.LEFT);
+        // Right box: enemies still alive on this level and the level number
+        int rx = b2 + 5;
+        g.setColor(0xFF9988);
+        g.drawString("ENEMY " + countEnemiesAlive(), rx, rowA + (icons ? textOff : 0),
+                Graphics.TOP | Graphics.LEFT);
+        g.setColor(0xC8D8A8);
+        g.drawString("LEVEL " + (world.currentLevel + 1), rx, rowB + (icons ? textOff : 0),
+                Graphics.TOP | Graphics.LEFT);
+    }
+
+    /** Monsters that are not dead and not dormant (used by the bottom HUD). */
+    private int countEnemiesAlive() {
+        int n = 0;
+        for (int i = 0; i < world.monCount; i++) {
+            int st = world.monState[i];
+            if (st != GameWorld.MSTATE_INACTIVE && st != GameWorld.MSTATE_DEAD) n++;
+        }
+        return n;
+    }
+
+    /**
+     * Developer-mode overlay across the top of the 3D view: player position, facing,
+     * FPS, dismembered-limb count and the shading mode. Returns the height used.
+     */
+    private int drawDevBar(Graphics g, Font font) {
+        int fh = font.getHeight();
+        int h = fh * 2 + 4;
+        g.setColor(0x101410);
+        g.fillRect(0, 0, scrW, h);
+        g.setColor(0x9A7B38);
+        g.drawLine(0, h - 1, scrW, h - 1);
+        g.setFont(font);
+
+        int ang = world.playerBody.rotation % MathUtils.FULL_CIRCLE;
+        if (ang < 0) ang += MathUtils.FULL_CIRCLE;
+        int deg = (int) ((long) ang * 360L / MathUtils.FULL_CIRCLE);
+
+        g.setColor(0x7FE0FF);
+        g.drawString("X:" + (world.playerBody.x >> 16) + " Z:" + (world.playerBody.z >> 16)
+                + " A:" + deg, 3, 2, Graphics.TOP | Graphics.LEFT);
         g.setColor(0x98B890);
-        String modeTag = SHADE_TAGS[world.polyRenderer.shadingMode & 3];
-        g.drawString(modeTag + " " + fpsDisplay + "FPS", rx, barY + 16, Graphics.TOP | Graphics.LEFT);
+        g.drawString("FPS:" + fpsDisplay + " LIMBS:" + world.limbsSevered + " "
+                + SHADE_TAGS[world.polyRenderer.shadingMode & 3], 3, 2 + fh, Graphics.TOP | Graphics.LEFT);
+        return h;
     }
 
     private void drawAutomapOverlay(Graphics g) {
@@ -580,7 +644,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         String[] opts = {
             "RESUME MISSION",
             "SHADING: " + shadeStr,
-            "SEVER ENEMY LIMB (DEMO)",
+            "DEV MODE: " + (world.devMode ? "ON" : "OFF"),
             "SKIP TO NEXT LEVEL",
             "MAIN MENU",
             "QUIT TO PHONE"
@@ -640,6 +704,8 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.drawString("TIP: aim at the enemy and fire;", 14, y + 8, Graphics.TOP | Graphics.LEFT);
         g.drawString("sever arms & head for bonus kills.", 14, y + 24, Graphics.TOP | Graphics.LEFT);
         g.drawString("Clear every enemy, then press 7.", 14, y + 40, Graphics.TOP | Graphics.LEFT);
+        g.drawString("Pause > DEV MODE: god mode, position,", 14, y + 62, Graphics.TOP | Graphics.LEFT);
+        g.drawString("FPS and LIMBS shown at the top.", 14, y + 78, Graphics.TOP | Graphics.LEFT);
 
         g.setFont(bold);
         g.setColor(0xFFE066);
@@ -827,18 +893,8 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 world.polyRenderer.cycleShadingMode();
                 break;
             case 2:
-                // Dismember next intact part on the lead monster so user can test dismemberment anytime
-                if (world.monCount > 0) {
-                    int mask = world.monPartMask[0];
-                    if ((mask & Model3D.MASK_RIGHT_HAND) != 0) {
-                        world.dismemberMonsterPart(0, Model3D.SUBMODEL_RIGHT_HAND);
-                    } else if ((mask & Model3D.MASK_LEFT_HAND) != 0) {
-                        world.dismemberMonsterPart(0, Model3D.SUBMODEL_LEFT_HAND);
-                    } else if ((mask & Model3D.MASK_HEAD) != 0) {
-                        world.dismemberMonsterPart(0, Model3D.SUBMODEL_HEAD);
-                    }
-                }
-                screenState = SCREEN_PLAYING;
+                // Developer mode: god mode + debug overlay. Stay in the menu so the state is visible.
+                world.devMode = !world.devMode;
                 break;
             case 3:
                 world.levelCompleted = true;

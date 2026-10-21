@@ -141,6 +141,9 @@ public final class GameWorld {
     public String hudMessage = "CHASM: THE RIFT";
     public int hudMessageTimer = 45;
     public boolean levelCompleted = false;
+
+    /** Developer mode (pause menu toggle): god mode + extra debug HUD. Persists across levels. */
+    public boolean devMode = false;
     public boolean gameOver = false;
 
     // ==================== 3D Monsters (with .CAR Dismemberment) ====================
@@ -1133,6 +1136,7 @@ public final class GameWorld {
 
     public void damagePlayer(int dmg) {
         if (gameOver) return;
+        if (devMode) return; // god mode
         if (armor > 0) {
             int absorb = dmg >> 1;
             if (absorb > armor) absorb = armor;

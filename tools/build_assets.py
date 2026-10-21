@@ -1304,6 +1304,31 @@ def build_ui_pack():
         f.write(ui_buf)
     print(f"[OK] Wrote ui.bin ({len(ui_buf)} bytes)")
 
+    # HUD status icons (16x16) cropped from the original CEL art:
+    #   HP   = marine face      (NSTAT.CEL, left panel)
+    #   AR   = silver armour ring (NSTAT.CEL, second panel)
+    #   AMMO = shotgun shells   (WICONS.CEL, first icon)
+    # Crop boxes are (x, y, w, h) in source pixels; sampled nearest-neighbour to 16x16.
+    icon_src = [
+        ("NSTAT.CEL", (5, 16, 24, 24)),
+        ("NSTAT.CEL", (107, 15, 24, 24)),
+        ("WICONS.CEL", (3, 3, 20, 20)),
+    ]
+    icon_buf = bytearray()
+    for cname, (cx, cy, cw, ch) in icon_src:
+        cdata = csm.read(cname)
+        _, sw, sh = struct.unpack("<3H", cdata[:6])
+        spix = cdata[800:800 + sw * sh]
+        icon_buf.extend(struct.pack(">HH", 16, 16))
+        for y in range(16):
+            sy = cy + (y * ch) // 16
+            for x in range(16):
+                sx = cx + (x * cw) // 16
+                icon_buf.append(spix[sy * sw + sx])
+    with open(os.path.join(RES_DIR, "hud_icons.bin"), "wb") as f:
+        f.write(icon_buf)
+    print(f"[OK] Wrote hud_icons.bin ({len(icon_buf)} bytes)")
+
 
 
 if __name__ == "__main__":
