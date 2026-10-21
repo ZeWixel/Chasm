@@ -30,6 +30,9 @@ if [ ! -f "${ROOT_DIR}/res/levels/level1.c3b" ] || [ ! -f "${ROOT_DIR}/res/model
     if [ ! -f "/tmp/ChasmTheRift/CSM.BIN" ]; then
         git clone --depth 1 https://github.com/Spastic-Dev/ChasmTheRift.git /tmp/ChasmTheRift
     fi
+    if [ ! -f "/tmp/CovertOps3D-RE/scripts/c3d2_core.py" ]; then
+        git clone --depth 1 -b arena/019ff1eb-covertops3d-re https://github.com/klaxons1/CovertOps3D-RE.git /tmp/CovertOps3D-RE
+    fi
     python3 tools/build_assets.py
 else
     echo "Using existing pre-built J2ME C3D2/C3B & 3D resources in ${ROOT_DIR}/res/"

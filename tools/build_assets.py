@@ -3,8 +3,9 @@
 Asset Extraction & C3D2/C3B Portal Compiler Pipeline for Chasm: The Rift J2ME Port.
 - Converts wall, floor/ceiling, and sky textures from tex.zip & CSM.BIN into 16-color
   4-bit BMP4 textures (/textures/custom/*.bmp) + /textures/custom/materials.c3m.
-- Compiles Chasm levels (MAP.01, MAP.05, MAP.06 + Sanctum Arena) into CovertOps3D-RE's
-  C3B1 BSP/Portal format (/levels/level1.c3b .. /levels/level4.c3b) via c3d2_core.py.
+- Compiles Chasm levels (MAP.01, MAP.05, MAP.06, MAP.99 = Time Chasm Sanctum) into
+  CovertOps3D-RE's C3B1 BSP/Portal format (/levels/level1.c3b .. /levels/level4.c3b)
+  via c3d2_core.py from the CovertOps3D-RE clone.
 - Extracts 100% complete .CAR 3D monster models WITH their 3 embedded detached limb
   submodels (RightHand, LeftHand, Head) and .3O/.ANI 3D weapons/items/props into
   /models.bin using int16 vertex coordinates, Flat Shading colors, and Vertex Painting.
@@ -1052,7 +1053,7 @@ def build_all_levels():
     compile_chasm_map_to_c3b(1, 1, max_cells=220, wall_base_slot=1,  flat_base_slot=1)
     compile_chasm_map_to_c3b(2, 5, max_cells=220, wall_base_slot=9,  flat_base_slot=5)
     compile_chasm_map_to_c3b(3, 6, max_cells=220, wall_base_slot=11, flat_base_slot=5)
-    compile_chasm_map_to_c3b(4, 1, max_cells=160, wall_base_slot=17, flat_base_slot=9)
+    compile_chasm_map_to_c3b(4, 99, max_cells=160, wall_base_slot=17, flat_base_slot=9)
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 
 1. **C3D2/C3B BSP-Portal World Renderer (`PortalRenderer`)**:
    - Adapted from `CovertOps3D-RE`'s BSP-portal engine (`PortalRenderer`, `CustomLevelLoader`, `CustomMaterialSet`, `BSPNode`, `Sector`, `WallDefinition`, `RenderUtils`).
-   - Compiles original Chasm levels (`MAP.01`, `MAP.05`, `MAP.06`, and Rift Sanctum) into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level4.c3b`) with `0` BSP partition mismatches and 16-color 4-bit `BMP4` paletted wall, floor/ceiling flat, and skybox textures (`/res/textures/custom/materials.c3m`).
+   - Compiles original Chasm levels from `CSM.BIN` (`MAP.01` → level 1 "Power Station", `MAP.05` → level 2 "Around Pyramids", `MAP.06` → level 3 "Pyramid of Shmuher", `MAP.99` → level 4 Time Chasm Sanctum) into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level4.c3b`) with `0` BSP partition mismatches and 16-color 4-bit `BMP4` paletted wall, floor/ceiling flat, and skybox textures (`/res/textures/custom/materials.c3m`).
 
 2. **Software 3D Polygon Renderer Without a Z-Buffer (`PolyRenderer3D`)**:
    - Zero Z-buffer allocation or per-pixel depth buffer reads/writes.
