@@ -95,9 +95,6 @@ public class PortalRenderer {
         if (screenBuffer == null) {
             screenBuffer = new int[SCREEN_BUFFER_SIZE];
         }
-        if (depthBuffer == null) {
-            depthBuffer = new short[VIEWPORT_HEIGHT];
-        }
         if (renderUtils == null) {
             renderUtils = new RenderUtils();
         }
@@ -156,26 +153,17 @@ public class PortalRenderer {
     /** Average neutral sky color used by the optional flat-sky mode. */
     private static int skyFlatColor = 0xFF405070;
 
-    /** Depth buffer for span rendering */
-    static short[] depthBuffer;
-
-    /** Floor span start Y coordinate */
-    private static int floorSpanStart;
-
-    /** Floor span end Y coordinate */
-    private static int floorSpanEnd;
-
-    /** Ceiling span start Y coordinate */
-    private static int ceilingSpanStart;
-
-    /** Ceiling span end Y coordinate */
-    private static int ceilingSpanEnd;
-
-    /** Last X column where floor span was updated */
-    private static int lastFloorColumnX;
-
-    /** Last X column where ceiling span was updated */
-    private static int lastCeilingColumnX;
+    /** Per-row open span runs for the wall batch being drawn (floor side). */
+    private static short[] floorRunStart;
+    private static short[] floorRunEnd;
+    /** Per-row open span runs for the wall batch being drawn (ceiling side). */
+    private static short[] ceilRunStart;
+    private static short[] ceilRunEnd;
+    /** Row range touched by the open runs of the current batch. */
+    private static int floorRunMin = Integer.MAX_VALUE;
+    private static int floorRunMax = -1;
+    private static int ceilRunMin = Integer.MAX_VALUE;
+    private static int ceilRunMax = -1;
 
     /** Render utilities for span-based rendering */
     static RenderUtils renderUtils;
@@ -811,13 +799,12 @@ public class PortalRenderer {
         int floorYStep = ((floorEndY - floorStartY) << 16) / columnCount;
         int floorY = (floorStartY << 16) + columnOffset * floorYStep + FP_HALF;
 
-        // Reset span tracking
-        ceilingSpanEnd = Integer.MIN_VALUE;
-        ceilingSpanStart = Integer.MIN_VALUE;
-        floorSpanEnd = Integer.MIN_VALUE;
-        floorSpanStart = Integer.MIN_VALUE;
-        lastCeilingColumnX = Integer.MIN_VALUE;
-        lastFloorColumnX = Integer.MIN_VALUE;
+        // Reset span tracking (all runs are closed at the end of every batch)
+        ensureSpanRuns();
+        ceilRunMin = Integer.MAX_VALUE;
+        ceilRunMax = -1;
+        floorRunMin = Integer.MAX_VALUE;
+        floorRunMax = -1;
 
         short sectorId = (short)sectorData.sectorId;
         Sprite floorTexture = sectorData.floorTexture;
@@ -928,21 +915,13 @@ public class PortalRenderer {
             floorY += floorYStep;
         }
 
-        // Flush remaining ceiling spans
-        if (ceilingSpanStart >= 0) {
-            short lastColumnX = (short)lastCeilingColumnX;
-            for (int row = ceilingSpanStart; row <= ceilingSpanEnd; row++) {
-                renderUtils.addRenderSpan(depthBuffer[row], lastColumnX, sectorId, row);
-            }
-        }
-
-        // Flush remaining floor spans
-        if (floorSpanStart >= 0) {
-            short lastColumnX = (short)lastFloorColumnX;
-            for (int row = floorSpanStart; row <= floorSpanEnd; row++) {
-                renderUtils.addRenderSpan(depthBuffer[row], lastColumnX, sectorId, row);
-            }
-        }
+        // Close every open run of this batch
+        flushSpanRuns(ceilRunStart, ceilRunEnd, ceilRunMin, ceilRunMax, sectorId);
+        flushSpanRuns(floorRunStart, floorRunEnd, floorRunMin, floorRunMax, sectorId);
+        ceilRunMin = Integer.MAX_VALUE;
+        ceilRunMax = -1;
+        floorRunMin = Integer.MAX_VALUE;
+        floorRunMax = -1;
     }
 
     /**
@@ -1078,6 +1057,49 @@ public class PortalRenderer {
      * @param topY       Top Y of the visible ceiling area
      * @param heightOffset Height offset for rendering
      */
+    private static void ensureSpanRuns() {
+        if (ceilRunStart == null) {
+            ceilRunStart = new short[VIEWPORT_HEIGHT];
+            ceilRunEnd = new short[VIEWPORT_HEIGHT];
+            floorRunStart = new short[VIEWPORT_HEIGHT];
+            floorRunEnd = new short[VIEWPORT_HEIGHT];
+            for (int row = 0; row < VIEWPORT_HEIGHT; row++) {
+                ceilRunStart[row] = -1;
+                floorRunStart[row] = -1;
+            }
+        }
+    }
+
+    /**
+     * Extends or restarts the open span run of every row in [fromRow, toRow] that
+     * this column covers. A run keeps growing only while consecutive columns cover
+     * the row, so a run is never flushed twice, never inverted, and never lost.
+     */
+    private static void extendSpanRuns(short[] runStart, short[] runEnd, int fromRow, int toRow,
+                                       int column, short sectorId) {
+        for (int row = fromRow; row <= toRow; row++) {
+            if (runStart[row] >= 0 && runEnd[row] == column - 1) {
+                runEnd[row] = (short)column;
+            } else {
+                if (runStart[row] >= 0) {
+                    renderUtils.addRenderSpan(runStart[row], runEnd[row], sectorId, row);
+                }
+                runStart[row] = (short)column;
+                runEnd[row] = (short)column;
+            }
+        }
+    }
+
+    /** Closes all open runs in [fromRow, toRow] and emits them as render spans. */
+    private static void flushSpanRuns(short[] runStart, short[] runEnd, int fromRow, int toRow, short sectorId) {
+        for (int row = fromRow; row <= toRow; row++) {
+            if (runStart[row] >= 0) {
+                renderUtils.addRenderSpan(runStart[row], runEnd[row], sectorId, row);
+                runStart[row] = -1;
+            }
+        }
+    }
+
     private static void updateCeilingSpan(short sectorId, int column, int topY, int heightOffset) {
         short floorClipY = Sector.floorClip[column];
         short ceilingClipY = Sector.ceilingClip[column];
@@ -1086,55 +1108,18 @@ public class PortalRenderer {
             return;
         }
 
-        int clippedTopY = topY;
-        short bottomY = ceilingClipY;
-
-        if (topY < floorClipY) {
-            clippedTopY = floorClipY;
+        int clippedTopY = topY < floorClipY ? floorClipY : topY;
+        if (clippedTopY > ceilingClipY) {
+            return;
         }
 
-        short columnShort = (short)column;
-
-        if (lastCeilingColumnX == column - 1) {
-            // Continue existing span
-            short prevColumnX = (short)lastCeilingColumnX;
-            int newSpanStart = clippedTopY > ceilingSpanEnd + 1 ? clippedTopY : ceilingSpanEnd + 1;
-            int extendedBottom = ceilingClipY < ceilingSpanStart - 1 ? ceilingClipY : ceilingSpanStart - 1;
-            int trimmedStart = ceilingSpanStart > ceilingClipY + 1 ? ceilingSpanStart : ceilingClipY + 1;
-            int trimmedEnd = ceilingSpanEnd < clippedTopY - 1 ? ceilingSpanEnd : clippedTopY - 1;
-
-            // Add new rows to depth buffer
-            for (int row = clippedTopY; row <= extendedBottom; row++) {
-                depthBuffer[row] = columnShort;
-            }
-            for (int row = newSpanStart; row <= bottomY; row++) {
-                depthBuffer[row] = columnShort;
-            }
-
-            // Flush completed span rows
-            for (int row = ceilingSpanStart; row <= trimmedEnd; row++) {
-                renderUtils.addRenderSpan(depthBuffer[row], prevColumnX, sectorId, row);
-            }
-            for (int row = trimmedStart; row <= ceilingSpanEnd; row++) {
-                renderUtils.addRenderSpan(depthBuffer[row], prevColumnX, sectorId, row);
-            }
-        } else {
-            // Start new span
-            if (ceilingSpanStart >= 0) {
-                short prevColumnX = (short)lastCeilingColumnX;
-                for (int row = ceilingSpanStart; row <= ceilingSpanEnd; row++) {
-                    renderUtils.addRenderSpan(depthBuffer[row], prevColumnX, sectorId, row);
-                }
-            }
-
-            for (int row = clippedTopY; row <= bottomY; row++) {
-                depthBuffer[row] = columnShort;
-            }
+        extendSpanRuns(ceilRunStart, ceilRunEnd, clippedTopY, ceilingClipY, column, sectorId);
+        if (clippedTopY < ceilRunMin) {
+            ceilRunMin = clippedTopY;
         }
-
-        lastCeilingColumnX = column;
-        ceilingSpanStart = clippedTopY;
-        ceilingSpanEnd = bottomY;
+        if (ceilingClipY > ceilRunMax) {
+            ceilRunMax = ceilingClipY;
+        }
     }
 
     /**
@@ -1153,53 +1138,18 @@ public class PortalRenderer {
             return;
         }
 
-        int clippedBottomY = bottomY;
-        if (bottomY > ceilingClipY) {
-            clippedBottomY = ceilingClipY;
+        int clippedBottomY = bottomY > ceilingClipY ? ceilingClipY : bottomY;
+        if (floorClipY > clippedBottomY) {
+            return;
         }
 
-        short columnShort = (short)column;
-
-        if (lastFloorColumnX == column - 1) {
-            // Continue existing span
-            short prevColumnX = (short)lastFloorColumnX;
-            int newSpanStart = floorClipY > floorSpanEnd + 1 ? floorClipY : floorSpanEnd + 1;
-            int extendedTop = clippedBottomY < floorSpanStart - 1 ? clippedBottomY : floorSpanStart - 1;
-            int trimmedStart = floorSpanStart > clippedBottomY + 1 ? floorSpanStart : clippedBottomY + 1;
-            int trimmedEnd = floorSpanEnd < floorClipY - 1 ? floorSpanEnd : floorClipY - 1;
-
-            // Add new rows to depth buffer
-            for (int row = floorClipY; row <= extendedTop; row++) {
-                depthBuffer[row] = columnShort;
-            }
-            for (int row = newSpanStart; row <= clippedBottomY; row++) {
-                depthBuffer[row] = columnShort;
-            }
-
-            // Flush completed span rows
-            for (int row = floorSpanStart; row <= trimmedEnd; row++) {
-                renderUtils.addRenderSpan(depthBuffer[row], prevColumnX, sectorId, row);
-            }
-            for (int row = trimmedStart; row <= floorSpanEnd; row++) {
-                renderUtils.addRenderSpan(depthBuffer[row], prevColumnX, sectorId, row);
-            }
-        } else {
-            // Start new span
-            if (floorSpanStart >= 0) {
-                short prevColumnX = (short)lastFloorColumnX;
-                for (int row = floorSpanStart; row <= floorSpanEnd; row++) {
-                    renderUtils.addRenderSpan(depthBuffer[row], prevColumnX, sectorId, row);
-                }
-            }
-
-            for (int row = floorClipY; row <= clippedBottomY; row++) {
-                depthBuffer[row] = columnShort;
-            }
+        extendSpanRuns(floorRunStart, floorRunEnd, floorClipY, clippedBottomY, column, sectorId);
+        if (floorClipY < floorRunMin) {
+            floorRunMin = floorClipY;
         }
-
-        lastFloorColumnX = column;
-        floorSpanStart = floorClipY;
-        floorSpanEnd = clippedBottomY;
+        if (clippedBottomY > floorRunMax) {
+            floorRunMax = clippedBottomY;
+        }
     }
 
     /**

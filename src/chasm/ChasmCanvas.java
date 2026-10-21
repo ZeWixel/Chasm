@@ -263,6 +263,67 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         }
     }
 
+    /**
+     * Renders one monster model at a time, cycling through the roster, into a framed
+     * window. Uses the painter's-algorithm model path into the viewport buffer and
+     * copies only the window rectangle to the screen.
+     */
+    private void drawEnemyPreviewWindow(Graphics g, int x, int y, int w, int h) {
+        int[] buf = PortalRenderer.screenBuffer;
+        int vw = PortalRenderer.VIEWPORT_WIDTH;
+        int vh = PortalRenderer.VIEWPORT_HEIGHT;
+        g.setColor(0x101410);
+        g.fillRect(x, y, w, h);
+        if (buf == null || world.polyRenderer == null || w > vw || h > vh) {
+            return;
+        }
+
+        int t = world.levelTick;
+        int slot = (t / 96) % GameWorld.MONSTER_NAMES.length;
+        Model3D model = world.polyRenderer.getModel(slot);
+
+        // Clear the window rectangle in the viewport buffer (centred, same stride).
+        int bx = (vw - w) >> 1;
+        int by = (vh - h) >> 1;
+        int bg = 0xFF101410;
+        for (int row = by; row < by + h; row++) {
+            int o = row * vw + bx;
+            for (int c = 0; c < w; c++) {
+                buf[o + c] = bg;
+            }
+        }
+
+        if (model != null && model.fCount > 0) {
+            int frames = model.fCount;
+            int step = (t >> 2);
+            int fA = step % frames;
+            int fB = (fA + 1) % frames;
+            int interp = (t & 3) << 6;
+            // Undo the camera yaw so the monster turns on its own axis, not with the menu pan.
+            int spin = MathUtils.wrapAngle(t * 700 + world.playerBody.rotation);
+            world.polyRenderer.renderWorldModel(
+                    model,
+                    0, 0, 96 << 16,
+                    spin,
+                    fA, fB, interp,
+                    0xFF,
+                    1100,
+                    0, 786432, 0,
+                    0, 65536,
+                    236, 0,
+                    false, buf);
+        }
+
+        g.drawRGB(buf, by * vw + bx, vw, x, y, w, h, false);
+        g.setColor(0x7A8B68);
+        g.drawRect(x, y, w - 1, h - 1);
+
+        Font nameFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
+        g.setFont(nameFont);
+        g.setColor(0xFFE066);
+        g.drawString(GameWorld.MONSTER_NAMES[slot], x + (w >> 1), y + h + 2, Graphics.TOP | Graphics.HCENTER);
+    }
+
     private void drawMainMenu(Graphics g) {
         UiAssets.ensureLoaded();
 
@@ -278,12 +339,13 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             g.fillRect(0, 0, scrW, scrH);
         }
 
+        // Live enemy window (first-build style): the 3D monsters animate in place of the LOADING logo.
+        int winH = scrH >= 280 ? 96 : 64;
+        int winW = (winH * 4) / 3;
+        int winX = (scrW - winW) >> 1;
         int topY = 6;
-        if (UiAssets.logo != null && UiAssets.logoW > 0) {
-            int lx = (scrW - UiAssets.logoW) >> 1;
-            g.drawRGB(UiAssets.logo, 0, UiAssets.logoW, lx, topY, UiAssets.logoW, UiAssets.logoH, true);
-            topY += UiAssets.logoH + 6;
-        }
+        drawEnemyPreviewWindow(g, winX, topY, winW, winH);
+        topY += winH + 18;
 
         String shadeStr = PolyRenderer3D.SHADE_NAMES[world.polyRenderer.shadingMode];
         String soundStr = (sound != null && sound.musicEnabled) ? "ON" : "OFF";
