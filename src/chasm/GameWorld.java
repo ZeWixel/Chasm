@@ -244,6 +244,21 @@ public final class GameWorld {
     /** Barrels queued for detonation during one chain reaction. */
     private final int[] blastQueue = new int[MAX_PROPS];
 
+    /** Fireballs drawn at detonation points. Each lives BLAST_FX_LIFE ticks. */
+    public static final int MAX_BLAST_FX = 3;
+    public static final int BLAST_FX_LIFE = 10;
+    /** Ticks of whole-screen flash when the player is inside a blast. */
+    public static final int BLAST_FLASH_TICKS = 4;
+    /** World position (16.16) of each fireball: floor + barrel centre height. */
+    private final int[] blastFxX = new int[MAX_BLAST_FX];
+    private final int[] blastFxY = new int[MAX_BLAST_FX];
+    private final int[] blastFxZ = new int[MAX_BLAST_FX];
+    /** Ticks left for each fireball; 0 = slot free. */
+    private final int[] blastFxLeft = new int[MAX_BLAST_FX];
+    /** Whole-screen flash ticks left (player inside a blast). */
+    public int blastFlashTimer = 0;
+    private final int[] blastScreen = new int[2];
+
     // ==================== 3D Projectiles & Gibs ====================
     public static final int MAX_PROJ = 24;
     /** Projectile model ids (models.bin): 33 = gib particle, 34 = saw-disk, 35 = energy bolt. */
@@ -834,6 +849,8 @@ public final class GameWorld {
         this.gameOver = false;
         this.muzzleFlashTimer = 0;
         this.damageFlashTimer = 0;
+        this.blastFlashTimer = 0;
+        for (int i = 0; i < MAX_BLAST_FX; i++) blastFxLeft[i] = 0;
         this.weaponCooldown = 0;
         this.weaponAnimTick = 0;
 
@@ -1067,7 +1084,9 @@ public final class GameWorld {
             );
         }
 
-        // 3. Apply damage flash tint if player was hit
+        // 3. Barrel blast: screen flash and fireballs, then the damage tint if the player was hit
+        drawBlastFx(PortalRenderer.screenBuffer);
+
         if (damageFlashTimer > 0) {
             int[] buf = PortalRenderer.screenBuffer;
             int len = PortalRenderer.SCREEN_BUFFER_SIZE;
@@ -1333,6 +1352,7 @@ public final class GameWorld {
             int cx = propX[b];
             int cz = propZ[b];
             SoundManager.playSfx(SoundManager.SFX_ROCKET);
+            spawnBlastFx(cx, cz);
             for (int k = 0; k < 4; k++) {
                 spawnProjectile(false, PROJ_GIB, cx, 8 << 16, cz, nextRand() & 0xFFFF, 0);
             }
@@ -1359,8 +1379,94 @@ public final class GameWorld {
 
             int pd = blastDistance(cx, cz, playerBody.x, playerBody.z);
             if (pd < BARREL_BLAST_RADIUS) {
+                blastFlashTimer = BLAST_FLASH_TICKS;
                 int dmg = blastDamage(pd);
                 if (dmg > 0) damagePlayer(dmg);
+            }
+        }
+    }
+
+    /** Starts a fireball at (cx, cz), reusing the oldest slot when all are busy. */
+    private void spawnBlastFx(int cx, int cz) {
+        int slot = 0;
+        for (int i = 0; i < MAX_BLAST_FX; i++) {
+            if (blastFxLeft[i] == 0) { slot = i; break; }
+            if (blastFxLeft[i] < blastFxLeft[slot]) slot = i;
+        }
+        SectorData sd = getSectorDataAtPoint(cx, cz);
+        int floorFP = (sd != null ? sd.floorHeight : 0) << 16;
+        blastFxX[slot] = cx;
+        blastFxY[slot] = floorFP + (20 << 16);
+        blastFxZ[slot] = cz;
+        blastFxLeft[slot] = BLAST_FX_LIFE;
+    }
+
+    /** Ages the fireballs and the screen flash by one tick. */
+    private void updateBlastFx() {
+        if (blastFlashTimer > 0) blastFlashTimer--;
+        for (int i = 0; i < MAX_BLAST_FX; i++) {
+            if (blastFxLeft[i] > 0) blastFxLeft[i]--;
+        }
+    }
+
+    /**
+     * Draws the barrel blast on the finished 3D frame: a whole-screen warm flash while the
+     * player is inside the blast radius, then the fireballs at the blast points. Fireballs are
+     * projected with the camera of the current frame; they are not occluded by walls.
+     */
+    private void drawBlastFx(int[] buf) {
+        if (blastFlashTimer > 0) {
+            int add = blastFlashTimer * 22;
+            int addG = add * 3 / 4;
+            int addB = add / 3;
+            for (int i = 0; i < PortalRenderer.SCREEN_BUFFER_SIZE; i++) {
+                int c = buf[i];
+                int r = ((c >> 16) & 0xFF) + add;
+                int g = ((c >> 8) & 0xFF) + addG;
+                int b = (c & 0xFF) + addB;
+                buf[i] = (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
+            }
+        }
+        for (int i = 0; i < MAX_BLAST_FX; i++) {
+            int left = blastFxLeft[i];
+            if (left <= 0) continue;
+            if (!PortalRenderer.projectLast(blastFxX[i], blastFxY[i], blastFxZ[i], blastScreen)) continue;
+            int age = BLAST_FX_LIFE - left;
+            // Grows to about 27 px, then shrinks while it fades.
+            int radius = age < 6 ? 3 + age * 4 : 27 - (age - 6) * 6;
+            if (radius < 2) radius = 2;
+            drawFireball(buf, blastScreen[0], blastScreen[1], radius, 255 * left / BLAST_FX_LIFE);
+        }
+    }
+
+    /** Alpha-blends one fireball disc: white-yellow core, orange ring, dark red edge. */
+    private static void drawFireball(int[] buf, int cx, int cy, int radius, int alpha) {
+        final int w = PortalRenderer.VIEWPORT_WIDTH;
+        final int h = PortalRenderer.VIEWPORT_HEIGHT;
+        int r2 = radius * radius;
+        int y0 = Math.max(0, cy - radius);
+        int y1 = Math.min(h - 1, cy + radius);
+        int x0 = Math.max(0, cx - radius);
+        int x1 = Math.min(w - 1, cx + radius);
+        for (int y = y0; y <= y1; y++) {
+            int dy = y - cy;
+            int row = y * w;
+            for (int x = x0; x <= x1; x++) {
+                int dx = x - cx;
+                int d2 = dx * dx + dy * dy;
+                if (d2 > r2) continue;
+                int t = d2 * 256 / r2;
+                int col;
+                if (t < 80) col = 0xFFF2B0;
+                else if (t < 170) col = 0xFF8A20;
+                else col = 0xB02A10;
+                int a = alpha * (256 - t / 2) >> 8;
+                int old = buf[row + x];
+                int or = (old >> 16) & 0xFF, og = (old >> 8) & 0xFF, ob = old & 0xFF;
+                int nr = or + ((((col >> 16) & 0xFF) - or) * a >> 8);
+                int ng = og + ((((col >> 8) & 0xFF) - og) * a >> 8);
+                int nb = ob + (((col & 0xFF) - ob) * a >> 8);
+                buf[row + x] = (nr << 16) | (ng << 8) | nb;
             }
         }
     }
@@ -1616,6 +1722,7 @@ public final class GameWorld {
         if (weaponAnimTick > 0) weaponAnimTick--;
         if (muzzleFlashTimer > 0) muzzleFlashTimer--;
         if (damageFlashTimer > 0) damageFlashTimer--;
+        updateBlastFx();
         if (hudMessageTimer > 0) hudMessageTimer--;
 
         updateDetachedLimbs();

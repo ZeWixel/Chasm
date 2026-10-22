@@ -85,7 +85,7 @@ Barrels are prop model 30 (`BAREL1.3O`), one per `BAREL` object on the map. They
 - **Hit points:** 40. Two Rift Rifle hits (24 each), three Volcano Chaingun hits (18 each), or one Double Shotgun blast (52).
 - **Blast:** when a barrel reaches 0 HP it explodes. Monsters and the player within 192 world units (two 96-unit cells) take `round(90 * (1 - d / 192))`, so 90 at the centre and 0 at the edge. Damage to the player goes through the normal armour rule. Blast damage has no line-of-sight check.
 - **Chain:** every other barrel inside the blast takes the same damage. A barrel that reaches 0 HP explodes too, through a queue, so a chain is iterative and each barrel explodes once.
-- **Feedback:** a blast plays the rocket sound and throws four gib particles. A destroyed barrel stops colliding, is not drawn, and cannot be targeted.
+- **Feedback:** a blast plays the rocket sound and throws four gib particles. Each detonation draws a fireball at the barrel's position: it grows for six ticks, then shrinks and fades over ten ticks. If the player is inside the blast radius, the whole screen flashes warm for four ticks. The fireball is projected with the frame's camera and is not hidden by walls. A destroyed barrel stops colliding, is not drawn, and cannot be targeted.
 
 The HP and blast values above are the values chosen for this port. They were not read from the original data. The blast uses the damage formula of the Chasm-Reverse engine (`DoExplosionDamage`), but its constants are not extracted from `CSM.BIN`. `GameWorld.BARREL_HP`, `BARREL_BLAST_DAMAGE` and `BARREL_BLAST_RADIUS` hold them.
 

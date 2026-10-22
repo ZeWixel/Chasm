@@ -72,6 +72,26 @@ public class PortalRenderer {
     /** Flag indicating if gun fire lighting effect is active */
     public static boolean gunFireLighting = false;
 
+    /** Camera of the last rendered frame (same values the entity renderer uses). */
+    private static int camX, camY, camZ, camSin, camCos;
+
+    /**
+     * Projects a world point to viewport pixels with the last rendered camera, using the same
+     * formulas as PolyRenderer3D.renderWorldModel. wy is the point's floor height plus its height
+     * above the floor, in 16.16. Returns false if the point is behind the near plane.
+     */
+    public static boolean projectLast(int wx, int wy, int wz, int[] out) {
+        long relX = (long) wx - camX;
+        long relZ = (long) wz - camZ;
+        int vx = (int) ((camCos * relX - camSin * relZ) >> 16);
+        int vz = (int) ((camSin * relX + camCos * relZ) >> 16);
+        int vy = -camY - wy;
+        if (vz < 6 << 16) return false;
+        out[0] = HALF_VIEWPORT_WIDTH + (int) (((long) vx * HALF_VIEWPORT_WIDTH) / vz);
+        out[1] = HALF_VIEWPORT_HEIGHT + (int) (((long) vy * HALF_VIEWPORT_WIDTH) / vz);
+        return true;
+    }
+
     /** Skybox horizontal scale factor */
     public static int skyboxScaleX;
 
@@ -573,6 +593,13 @@ public class PortalRenderer {
         int doubleAngle = playerAngle << 1;
         int sinAngle = MathUtils.fastSin(playerAngle);
         int cosAngle = MathUtils.fastCos(playerAngle);
+
+        // Keep the camera of this frame so effects drawn afterwards can project world points.
+        camX = playerX;
+        camY = playerY;
+        camZ = playerZ;
+        camSin = sinAngle;
+        camCos = cosAngle;
 
         gunFireLighting = LevelLoader.gameWorld.muzzleFlashTimer > 0;
 
