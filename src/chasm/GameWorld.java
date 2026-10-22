@@ -973,9 +973,14 @@ public final class GameWorld {
     private final WallDefinition[] panelCollide = new WallDefinition[MAX_PANELS];
     /** Every WallDefinition of a panel: its collision definition and one per side it is seen from. */
     private final Vector[] panelDefs = new Vector[MAX_PANELS];
-    /** Per proc: the portal walls between its door cells and the neighbours (hidden while closed). */
+    /** Per proc: the solid walls on a door's sides (hidden while closed; they still block). */
     private final Vector[] procHideWalls = new Vector[MAX_PROCS];
-    private final boolean[] procDoorClosed = new boolean[MAX_PROCS];
+    /** Per proc: the surfaces of its portal walls (their texture becomes the door panel's while closed). */
+    private final Vector[] procFaces = new Vector[MAX_PROCS];
+    /** Per proc: the original (upper, main, lower) texture ids of procFaces, three ints per surface. */
+    private final Vector[] procFaceSaved = new Vector[MAX_PROCS];
+    private final boolean[] procFaceShowsDoor = new boolean[MAX_PROCS];
+    private final int[] procDoorSlot = new int[MAX_PROCS];
     /** True for a proc that turns a rotating panel: it opens on a touch like a door. */
     private final boolean[] procHasRotor = new boolean[MAX_PROCS];
 
@@ -1068,34 +1073,55 @@ public final class GameWorld {
             if (panelKind[i] == PANEL_KIND_ROTATE && panelProc[i] >= 0) procHasRotor[panelProc[i]] = true;
         }
 
-        // Door faces: the walls on the door's sides (portals and solid edges) are hidden while the
-        // door is closed; they still block, only the panel is drawn.
+        // Door faces. While a door is closed its face is its panel texture: the portal walls on its
+        // sides keep drawing (they close the view through the zero-height door), with the panel's
+        // texture; the solid walls on its sides are hidden (they still block).
         for (int p = 0; p < procCount; p++) {
             procHideWalls[p] = null;
-            procDoorClosed[p] = true;
-            boolean hasDoorPanel = false;
-            for (int i = 0; i < panelCount; i++) {
-                if (panelKind[i] == PANEL_KIND_DOOR && panelProc[i] == p) hasDoorPanel = true;
-            }
-            if (!hasDoorPanel) continue;
-            Vector hide = new Vector();
+            procFaces[p] = null;
+            procFaceSaved[p] = null;
+            procFaceShowsDoor[p] = false;
+            procDoorSlot[p] = -1;
             int[] cells = procCell[p];
+            for (int i = 0; i < panelCount; i++) {
+                if (panelKind[i] == PANEL_KIND_DOOR && panelProc[i] == p) {
+                    procDoorSlot[p] = panelSlot[i];
+                    break;
+                }
+            }
+            if (procDoorSlot[p] < 0) continue;
+            Vector hide = new Vector();
+            Vector faces = new Vector();
+            Vector saved = new Vector();
             for (int w = 0; w < oldW; w++) {
                 WallDefinition wd = wallDefinitions[w];
+                if (wd.frontSurface == null) continue;
                 for (int c = 0; c < cells.length; c += 4) {
                     int sid = cells[c + 2];
                     if (sid < 0 || sid >= sectors.length) continue;
                     SectorData door = sectors[sid];
                     if (wd.frontSurface.linkedSector == door
                             || (wd.backSurface != null && wd.backSurface.linkedSector == door)) {
-                        hide.addElement(wd);
+                        if (wd.backSurface == null) {
+                            hide.addElement(wd);
+                        } else {
+                            addFace(faces, saved, wd.frontSurface);
+                            addFace(faces, saved, wd.backSurface);
+                        }
                         break;
                     }
                 }
             }
             procHideWalls[p] = hide;
+            procFaces[p] = faces;
+            procFaceSaved[p] = saved;
         }
         updatePanels();
+    }
+
+    private static void addFace(Vector faces, Vector saved, WallSurface surf) {
+        faces.addElement(surf);
+        saved.addElement(new int[] {surf.upperTextureId, surf.mainTextureId, surf.lowerTextureId});
     }
 
     /**
@@ -1159,12 +1185,30 @@ public final class GameWorld {
             }
         }
         for (int p = 0; p < procCount; p++) {
-            Vector hide = procHideWalls[p];
-            if (hide == null) continue;
             boolean closed = procStage[p] == 0;
-            procDoorClosed[p] = closed;
-            for (int h = 0; h < hide.size(); h++) {
-                ((WallDefinition) hide.elementAt(h)).hidden = closed;
+            Vector hide = procHideWalls[p];
+            if (hide != null) {
+                for (int h = 0; h < hide.size(); h++) {
+                    ((WallDefinition) hide.elementAt(h)).hidden = closed;
+                }
+            }
+            Vector faces = procFaces[p];
+            if (faces != null && closed != procFaceShowsDoor[p]) {
+                procFaceShowsDoor[p] = closed;
+                Vector saved = procFaceSaved[p];
+                for (int f = 0; f < faces.size(); f++) {
+                    WallSurface surf = (WallSurface) faces.elementAt(f);
+                    if (closed) {
+                        surf.upperTextureId = (byte) procDoorSlot[p];
+                        surf.mainTextureId = (byte) procDoorSlot[p];
+                        surf.lowerTextureId = (byte) procDoorSlot[p];
+                    } else {
+                        int[] sv = (int[]) saved.elementAt(f);
+                        surf.upperTextureId = (byte) sv[0];
+                        surf.mainTextureId = (byte) sv[1];
+                        surf.lowerTextureId = (byte) sv[2];
+                    }
+                }
             }
         }
     }
