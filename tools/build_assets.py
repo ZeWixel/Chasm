@@ -4,7 +4,7 @@ Asset Extraction & C3D2/C3B Portal Compiler Pipeline for Chasm: The Rift J2ME Po
 - Converts wall, floor/ceiling, and sky textures from tex.zip & CSM.BIN into 16-color
   4-bit BMP4 textures (/textures/custom/*.bmp) + /textures/custom/materials.c3m.
 - Compiles the playable Chasm levels (MAP.01, MAP.05, MAP.06; MAP.99 is not playable) into
-  CovertOps3D-RE's C3B1 BSP/Portal format (/levels/level1.c3b .. /levels/level4.c3b)
+  CovertOps3D-RE's C3B1 BSP/Portal format (/levels/level1.c3b .. /levels/level3.c3b)
   via c3d2_core.py from the CovertOps3D-RE clone.
 - Extracts 100% complete .CAR 3D monster models WITH their 3 embedded detached limb
   submodels (RightHand, LeftHand, Head) and .3O/.ANI 3D weapons/items/props into
@@ -788,6 +788,8 @@ CHASM_TO_LOCAL_MON = {
     16: 9,  # Lion
 }
 
+MAX_LEVEL_ITEMS = 48   # GameWorld.MAX_ITEMS
+
 CHASM_TO_LOCAL_ITEM = {
     22: 17, 23: 18, 21: 19, 24: 20, 20: 21,
     1: 22, 2: 23, 3: 24, 4: 25, 5: 26,
@@ -796,7 +798,7 @@ CHASM_TO_LOCAL_ITEM = {
 }
 
 
-DOOR_CLOSED_GAP = 16  # closed door: ceiling 16 units above the floor (below the 50-unit clearance)
+DOOR_CLOSED_GAP = 0  # closed door: ceiling level with the floor, so the door frame is a full-height wall
 
 
 # Trigger kinds stored in procs{N}.bin (ids match GameWorld.TRIG_*).
@@ -1012,6 +1014,10 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
                     raw_props.append((32, wx0, wy0, unk & 7))
                 elif mfname.startswith("G_CARD"):
                     raw_items.append((28, wx0, wy0))   # green key
+                elif mfname.startswith("R_CARD"):
+                    raw_items.append((27, wx0, wy0))   # red key card
+                elif mfname.startswith("B_CARD"):
+                    raw_items.append((29, wx0, wy0))   # blue key card
                 elif mfname.startswith("KEY.3O"):
                     raw_items.append((27, wx0, wy0))   # red key (generic key object)
 
@@ -1240,18 +1246,33 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
         valid_monsters.append((mtype, int((cx - 32.0) * SCALE), int((cy - 32.0) * SCALE), len(valid_monsters) & 7))
     valid_monsters = valid_monsters[:24]
 
-    valid_items = []
+    # Keys (27 red, 28 green, 29 blue) are placed first and are never cut: a level without its
+    # keys cannot be finished. Then the map's other pickups, then the added essentials. The
+    # total is capped at the runtime limit (GameWorld.MAX_ITEMS = 40).
+    def near_visited(cx, cy):
+        # An object can sit on the edge of a solid cell (its own cell is not walkable); it is
+        # reachable if a walkable cell of the flood fill is next to it.
+        return any((cx + dx, cy + dy) in visited for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+
+    key_items = []
+    map_items = []
     for itype, fx, fy in raw_items:
-        if (int(fx), int(fy)) in visited:
-            valid_items.append((itype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE)))
-    # Ensure weapons, medkits, armor, ammo, and keys are available in the level
-    # Keys (27-29) are not added here: they only exist where the map places them.
+        if near_visited(int(fx), int(fy)):
+            rec = (itype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE))
+            if itype in (27, 28, 29):
+                key_items.append(rec)
+            else:
+                map_items.append(rec)
+    # Ensure weapons, medkits, armor, ammo are available in the level
     essential_items = [22, 23, 24, 25, 26, 17, 19, 21, 18, 20]
+    essential_recs = []
     for idx_e, itype in enumerate(essential_items):
         if idx_e < len(sector_centers):
             cx, cy = sector_centers[(idx_e * 2 + 1) % len(sector_centers)]
-            valid_items.append((itype, int((cx - 32.0) * SCALE) + 16, int((cy - 32.0) * SCALE) - 16))
-    valid_items = valid_items[:28]
+            essential_recs.append((itype, int((cx - 32.0) * SCALE) + 16, int((cy - 32.0) * SCALE) - 16))
+    valid_items = (key_items + map_items + essential_recs)[:MAX_LEVEL_ITEMS]
+    print(f"[OK] items: {len(key_items)} keys, {len(map_items)} map pickups, "
+          f"{len(valid_items)} kept (limit {MAX_LEVEL_ITEMS})")
 
     valid_props = []
     for ptype, fx, fy, pang in raw_props:
@@ -1344,7 +1365,8 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 
 
 # ---------------------------------------------------------------------------
-# 5b. First-build levels: grid maps (tools/legacy/map1..4.bin, from commit b8d28e9) -> C3B
+# 5b. Grid -> C3B converter (tools/legacy/*.bin, from commit b8d28e9). Not used by the build:
+#     the first-build levels were removed from the game. The function stays as a tool.
 # ---------------------------------------------------------------------------
 # Those maps are 64x64 grids in the first build's own format (see write_map_bin there):
 #   >HHBBB spawn x*256, spawn y*256, angle (0..7), exit cell x, y
@@ -1354,22 +1376,8 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 #   >H count, then >BHHB monsters, >H count, then >BHH items, >H count, then >BHHB props
 # Levels 1-3 of that build are the MAP.01/05/06 layouts with steps and walls added by hand
 # (add_engineered_steps_and_walls). Level 4 was drawn by hand (build_level4_sanctum). None of
-# this is game data; it is kept to play the first build's levels in this version.
+# this is not game data.
 LEGACY_DIR = os.path.join(ROOT_DIR, "tools", "legacy")
-# (level index in the game, legacy map number, source MAP for textures, or None for a fixed list)
-LEGACY_LEVELS = [
-    (4, 1, 1),
-    (5, 2, 5),
-    (6, 3, 6),
-    (7, 4, None),
-]
-# Wall texture names of the first build's level 4 (build_level4_sanctum in b8d28e9).
-SANCTUM_WALL_NAMES = [
-    "ALIENB01", "ALIENG01", "ALIENG02", "BLWALL01", "BLWALL02", "BLWALL03",
-    "BRED02", "BRED03", "BRED04", "DMET01", "DMET02", "F_BORD01",
-    "GATE01", "GATE02", "GBLOCK1", "GBLOCK2", "P_BAM64", "P_FR56",
-    "P_STFR", "BRICKW1", "BRICKW2", "FENCE01", "BOX01", "BOX02",
-]
 
 
 def parse_legacy_map(data):
@@ -1662,26 +1670,11 @@ def compile_legacy_level(level_idx, legacy_no, wall_names, floor_fids, floors_bl
           f"monsters={len(monsters)}, items={len(items)}, props={len(props)}, c3b={info['total_size']}B")
 
 
-def build_legacy_levels():
-    for level_idx, legacy_no, source_map in LEGACY_LEVELS:
-        if source_map is None:
-            wall_names = SANCTUM_WALL_NAMES
-            floor_fids = list(range(12))
-            floors_blob = csm.read("FLOORS.06")
-            label = "first build level 4, fixed texture list"
-        else:
-            wall_names, floor_fids = legacy_texture_lists(source_map)
-            floors_blob = csm.read(f"FLOORS.{source_map:02d}")
-            label = f"first build level {legacy_no}, textures of MAP.{source_map:02d}"
-        compile_legacy_level(level_idx, legacy_no, wall_names, floor_fids, floors_blob, label)
-
-
 def build_all_levels():
     compile_chasm_map_to_c3b(1, 1, max_cells=2000)
     compile_chasm_map_to_c3b(2, 5, max_cells=2000)
     compile_chasm_map_to_c3b(3, 6, max_cells=2000)
-    # MAP.99 is the briefing background (not playable). Levels 4-7 are the first build's grid maps.
-    build_legacy_levels()
+    # MAP.99 is the briefing background (not playable). The first-build levels were removed.
 
 
 # ---------------------------------------------------------------------------

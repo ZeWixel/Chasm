@@ -39,7 +39,7 @@ public final class GameWorld {
     // Levels 1-3: MAP.01, MAP.05, MAP.06 of the CSM.BIN used by this build (MAP.99 is the briefing
     // background, not a mission). Levels 4-7: the first build's four grid levels (tools/legacy),
     // with the steps and walls that were added by hand there. They are not game data.
-    public static final int NUM_LEVELS = 7;
+    public static final int NUM_LEVELS = 3;
     public static final String[] LEVEL_NAMES = {
         "THE POWER STATION",
         "AROUND PYRAMIDS",
@@ -208,7 +208,7 @@ public final class GameWorld {
     public final Sector[] limbSector       = new Sector[MAX_LIMBS];
 
     // ==================== 3D Items (Pickups) ====================
-    public static final int MAX_ITEMS = 40;
+    public static final int MAX_ITEMS = 48;
     public int itemCount = 0;
     public final boolean[] itemActive  = new boolean[MAX_ITEMS];
     public final int[] itemType        = new int[MAX_ITEMS];
@@ -444,8 +444,8 @@ public final class GameWorld {
     private static final int TICKS_PER_SECOND = 28;
     /** Cell size in world units; matches the compiler's SCALE. */
     private static final int CELL_UNITS = 96;
-    /** Closed door/gate ceiling sits this far above the floor (below the 50-unit clearance). */
-    private static final int DOOR_CLOSED_GAP = 16;
+    /** Closed door/gate ceiling sits this far above the floor (0: level with it, so it blocks the player). */
+    private static final int DOOR_CLOSED_GAP = 0;
 
     public int procCount = 0;
     private final int[] procId = new int[MAX_PROCS];
@@ -598,6 +598,30 @@ public final class GameWorld {
         return -1;
     }
 
+    /**
+     * Door cells for the automap, as triples (cell x, cell y, key id). Key id 0 = no key (a door
+     * that only an 'unlock' opens); 1 green, 2 red, 3 blue. Moving platforms are not doors.
+     */
+    public int[] automapDoorCells() {
+        int n = 0;
+        for (int p = 0; p < procCount; p++) {
+            if (procMoves[p]) continue;
+            n += procCell[p].length / 4;
+        }
+        int[] out = new int[n * 3];
+        int j = 0;
+        for (int p = 0; p < procCount; p++) {
+            if (procMoves[p]) continue;
+            int[] cells = procCell[p];
+            for (int c = 0; c < cells.length; c += 4) {
+                out[j++] = cells[c];
+                out[j++] = cells[c + 1];
+                out[j++] = procKey[p];
+            }
+        }
+        return out;
+    }
+
     private boolean hasKey(int k) {
         if (k == 1) return hasGreenKey;
         if (k == 2) return hasRedKey;
@@ -641,6 +665,8 @@ public final class GameWorld {
             } else if (procKey[p] != 0) {
                 setMessage(procKey[p] == 1 ? "LOCKED - NEED GREEN KEY"
                         : (procKey[p] == 2 ? "LOCKED - NEED RED KEY" : "LOCKED - NEED BLUE KEY"), 40);
+            } else {
+                setMessage("LOCKED", 40);   // unkeyed door still locked by an 'unlock' from another proc
             }
             return false;
         }

@@ -583,8 +583,12 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         int mapX = (viewW - mapW) >> 1;
         int mapY = 18;
 
-        g.setColor(0x0C120C);
-        g.fillRect(mapX, mapY, mapW, mapH);
+        // Semi-transparent black background: one ARGB row at a time (MIDP 2.0 drawRGB with alpha).
+        int[] bgRow = new int[mapW];
+        for (int i = 0; i < mapW; i++) bgRow[i] = 0x99000000;
+        for (int y = 0; y < mapH; y++) {
+            g.drawRGB(bgRow, 0, mapW, mapX, mapY + y, mapW, 1, true);
+        }
         g.setColor(0x789868);
         g.drawRect(mapX, mapY, mapW - 1, mapH - 1);
 
@@ -593,7 +597,15 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         int px = world.playerBody.x >> 16;
         int pz = world.playerBody.z >> 16;
 
-        // Draw C3B wall segments around player
+        // Everything inside the frame is clipped to its inner rectangle, so lines never leave it.
+        int saveX = g.getClipX();
+        int saveY = g.getClipY();
+        int saveW = g.getClipWidth();
+        int saveH = g.getClipHeight();
+        g.setClip(mapX + 1, mapY + 1, mapW - 2, mapH - 2);
+
+        // Walls (C3B), kept when the segment crosses the window
+        int left = mapX + 1, right = mapX + mapW - 2, top = mapY + 1, bottom = mapY + mapH - 2;
         if (world.wallDefinitions != null && world.vertices != null) {
             for (int i = 0; i < world.wallDefinitions.length; i++) {
                 WallDefinition w = world.wallDefinitions[i];
@@ -603,16 +615,38 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 int y0 = cy - (((v0.y >> 16) - pz) >> 3);
                 int x1 = cx + (((v1.x >> 16) - px) >> 3);
                 int y1 = cy - (((v1.y >> 16) - pz) >> 3);
-
-                if ((x0 >= mapX && x0 < mapX + mapW && y0 >= mapY && y0 < mapY + mapH)
-                        || (x1 >= mapX && x1 < mapX + mapW && y1 >= mapY && y1 < mapY + mapH)) {
-                    g.setColor(CollisionSystem.isWallSolid(w) ? 0x88CC88 : 0x446644);
-                    g.drawLine(x0, y0, x1, y1);
+                if ((x0 < left && x1 < left) || (x0 > right && x1 > right)
+                        || (y0 < top && y1 < top) || (y0 > bottom && y1 > bottom)) {
+                    continue;
                 }
+                g.setColor(CollisionSystem.isWallSolid(w) ? 0x88CC88 : 0x446644);
+                g.drawLine(x0, y0, x1, y1);
             }
         }
 
-        // Draw monsters on automap
+        // Doors: a 5x5 mark in the colour of the key that opens them (grey = no key).
+        int[] doors = world.automapDoorCells();
+        for (int d = 0; d < doors.length; d += 3) {
+            int mx = cx + (((((doors[d] - 32) * 96) + 48) - (px)) >> 3);
+            int my = cy - (((((doors[d + 1] - 32) * 96) + 48) - (pz)) >> 3);
+            g.setColor(keyColor(doors[d + 2]));
+            g.fillRect(mx - 2, my - 2, 5, 5);
+        }
+
+        // Keys on the map, in their colour (green 28, red 27, blue 29).
+        for (int i = 0; i < GameWorld.MAX_ITEMS && i < world.itemCount; i++) {
+            if (!world.itemActive[i]) continue;
+            int m = world.itemModelId[i];
+            if (m != 27 && m != 28 && m != 29) continue;
+            int kx = cx + (((world.itemX[i] >> 16) - px) >> 3);
+            int ky = cy - (((world.itemZ[i] >> 16) - pz) >> 3);
+            g.setColor(m == 28 ? 0x33DD44 : (m == 27 ? 0xDD3322 : 0x3366FF));
+            g.fillRect(kx - 2, ky - 2, 5, 5);
+            g.setColor(0xFFFFFF);
+            g.drawRect(kx - 2, ky - 2, 4, 4);
+        }
+
+        // Monsters
         for (int m = 0; m < world.monCount; m++) {
             if (world.monState[m] == GameWorld.MSTATE_INACTIVE) continue;
             int mx = cx + (((world.monX[m] >> 16) - px) >> 3);
@@ -622,6 +656,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 g.fillRect(mx - 1, my - 1, 3, 3);
             }
         }
+        g.setClip(saveX, saveY, saveW, saveH);
 
         // Player marker: a triangle pointing where the player faces. World forward is (sin, cos)
         // in (x, z); the map's y axis points up, so screen direction is (sin, -cos).
@@ -634,6 +669,14 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 cx + (ux * 6) / 64, cy + (uy * 6) / 64,
                 cx + (-ux * 4 - uy * 3) / 64, cy + (-uy * 4 + ux * 3) / 64,
                 cx + (-ux * 4 + uy * 3) / 64, cy + (-uy * 4 - ux * 3) / 64);
+    }
+
+    /** Key colours used on the automap: 1 green, 2 red, 3 blue, 0 no key (grey). */
+    private static int keyColor(int keyId) {
+        if (keyId == 1) return 0x33DD44;
+        if (keyId == 2) return 0xDD3322;
+        if (keyId == 3) return 0x3366FF;
+        return 0xBBBBBB;
     }
 
     /** Filled triangle by scanlines (MIDP 2.0 Graphics has no fillTriangle). */

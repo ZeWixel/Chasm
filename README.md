@@ -6,7 +6,7 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 
 1. **C3D2/C3B BSP-Portal World Renderer (`PortalRenderer`)**:
    - Adapted from `CovertOps3D-RE`'s BSP-portal engine (`PortalRenderer`, `CustomLevelLoader`, `CustomMaterialSet`, `BSPNode`, `Sector`, `WallDefinition`, `RenderUtils`).
-  - Compiles the playable levels into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level7.c3b`) with `0` BSP partition mismatches. Levels 1–3 come from `CSM.BIN` (`MAP.01` → "Power Station", `MAP.05` → "Around Pyramids", `MAP.06` → "Pyramid of Shmuher"). Levels 4–7 are the first build's grid levels, which are not game data (see Levels). `MAP.99` is the briefing background and is not built.
+  - Compiles the playable levels into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level3.c3b`) with `0` BSP partition mismatches. Levels 1–3 come from `CSM.BIN` (`MAP.01` → "Power Station", `MAP.05` → "Around Pyramids", `MAP.06` → "Pyramid of Shmuher"). `MAP.99` is the briefing background and is not built.
    - Textures follow each map's own IDs: a wall tile ID is looked up in the map's `#GFX` table in `RESOURCE.XX` (e.g. `19` → `sewer01.cel`) and the matching PNG from `tex.zip` is used, or the original `.CEL` from `CSM.BIN` when no PNG exists. Floor and ceiling values index the 64 tiles of `FLOORS.XX`. Each level has its own `/res/textures/custom/L<n>/materials.c3m`; the BMP4 textures themselves are shared under `/res/textures/custom/shared/`. Textures are 16-colour 4-bit `BMP4`; tall 64×128 walls are squashed to 64×64.
 
 2. **Software 3D Polygon Renderer Without a Z-Buffer (`PolyRenderer3D`)**:
@@ -95,7 +95,7 @@ There is no use key. Doors, gates, switches and the exit work on touch, as in th
 
 - **Triggers** (from `#links` and `LinkSwitchAt`): `link` fires when the player comes within one cell (3x3 block), `floor` when the player steps on the cell, `onofflink` the same as `link` but a second touch closes the proc, and `return` resets the proc to its start state.
 - **Activation** follows the original engine (`Chasm-Reverse`, `ProcedureProcess*`). A proc runs only if it is unlocked, or if the key it needs (green, red or blue) is held. `Lock` is removed by an `unlock N` action from another proc. A refused touch is retried every tick while the player stays in range, so a key picked up nearby opens the door.
-- **Doors** are sectors whose ceiling sits 16 units above the floor (closed, below the 50-unit clearance) and rises to the open height. `StartDelay` and `BackWait` are in seconds (converted at 28 ticks per second). `BackWait 0` means the door never returns. A door never closes on the player: it waits until the player leaves its cells.
+- **Doors** are sectors whose ceiling is level with the floor when closed (blocks the player) and rises to the open height. `StartDelay` and `BackWait` are in seconds (converted at 28 ticks per second). `BackWait 0` means the door never returns. A door never closes on the player: it waits until the player leaves its cells.
 - **Gates** (`up X Y H`) raise a transparent wall by H, so the cell opens to floor + H.
 - **Keys** are items 27 (red), 28 (green) and 29 (blue). The HUD shows the green and red keys in the top-right corner of the 3D view. The blue key is collected but has no HUD slot yet.
 - **Exit**: when every enemy is down, walking to the level's exit point completes the level. Nothing else needs to be pressed.
@@ -117,34 +117,23 @@ Each level compiles its whole walkable area, so levels 1–7 have 156, 92, 254, 
 
 The `CSM.BIN` used by this build has four maps: `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99`. `MAP.99` is the briefing background, so it is not a level. The playable levels are:
 
-| Level | Map | Name (from `RESOURCE`) |
-|---|---|---|
-| 1 | MAP.01 | Power Station |
-| 2 | MAP.05 | Around Pyramids |
-| 3 | MAP.06 | Pyramid of Shmuher |
+| Level | Map | Name (from `RESOURCE`) | Keys |
+|---|---|---|---|
+| 1 | MAP.01 | Power Station | green (`G_CARD.3O`) |
+| 2 | MAP.05 | Around Pyramids | red (`KEY.3O`) |
+| 3 | MAP.06 | Pyramid of Shmuher | red (`KEY.3O`) |
 
-Levels 4–7 come from the first build (`b8d28e9`, PR #1), which had four levels in `res/map1..map4.bin`. Those files use a 64×64 grid format written by that build's `write_map_bin`. They are kept in `tools/legacy/map1..4.bin`, byte-identical to `res/map1..4.bin` in commit `b8d28e9`, and compiled by `tools/build_assets.py` (`build_legacy_levels`):
+The first-build levels (`b8d28e9`, PR #1) have been removed from the game. The grid-to-C3B converter stays in `tools/build_assets.py` (`parse_legacy_map`, `compile_legacy_level`) as a tool, but no grid maps are bundled and the build does not use it.
 
-| Level | First-build file | What it is |
-|---|---|---|
-| 4 | `map1.bin` | Power Station, from `MAP.01`, with hand-added steps and walls (`add_engineered_steps_and_walls`). Not game data. |
-| 5 | `map2.bin` | Around Pyramids, from `MAP.05`, with hand-added steps and walls. Not game data. |
-| 6 | `map3.bin` | Pyramid of Shmuher, from `MAP.06`, with hand-added steps and walls. Not game data. |
-| 7 | `map4.bin` | Time Chasm Sanctum, hand-drawn in `build_level4_sanctum`. Not game data. |
-
-Notes on levels 4–7:
-- Their cell types are open (0), wall (1), door (2, walkable, as in the first build, with no door process), window (3, solid) and exit (4). The sanctum's sliding gate (cell 32,29) is a door cell and therefore walkable.
-- Their wall and floor textures come from the first build's texture rules, mapped to this build's texture files. This is an approximation: the first build's own texture indices have no source in this repo. Level 7 uses the first build's sanctum wall list; two names (`P_BAM64`, `P_STFR`) are missing, so those walls are grey.
-- Their proc sidecars are empty, as in the first build.
-- Level 5 has 36 monsters and 32 props, and level 6 has 36 monsters. The runtime keeps 32 monsters and 24 props, so the first ones in the file are kept.
-- Music: level index `i` plays track `(i mod 4) + 1` (`mus_lvl1..4.mid`), so levels 4–7 reuse the four level tracks.
+Keys are pickups (models 27 red, 28 green, 29 blue). The converter places them first and never cuts them from the item list, so a level keeps its keys even when it has more than 48 pickups.
 
 ## Known limitations
 
-- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels from the data, plus four first-build levels (4–7) that are not game data. Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
+- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels from the data. Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
 
 - Only links (proximity, floor, toggle, return), `unlock` chains, doors, gates (`up`) and moving platforms are executed from `PROCESS.XX`. Shot-to-open (`destroy`, `shoot`), rotating parts, lights and animations are not.
-- Levels 4–7 are the first build's hand-made or hand-edited layouts, not Chasm's levels. Their textures are approximate (see Levels).
+- A closed door keeps an open upper frame: its ceiling is level with the floor, but the portal above it is not textured yet, so a black void shows above the closed door.
+- The automap (key 9) has not been checked on a device.
 - The full-area geometry has not been measured on a device. Frame rate and memory with 150–230 sectors are unknown.
 - Some portal walls still show angle-dependent distortion; the root cause has not been isolated.
 - Transparent grate textures are drawn as opaque (no masked mid-texture pass yet).
