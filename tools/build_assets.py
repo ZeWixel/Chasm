@@ -666,6 +666,7 @@ PROP_MODEL_SPECS = {
     32: ("OBELISK.3O", 0.55), # Obelisk / pillar
     36: ("M-STAR.3O", 2.0),   # Moving platform: star (PROCESS 'move' on a model cell)
     37: ("V2.3O", 2.0),       # Moving platform: V-shape (PROCESS 'move' on a model cell)
+    38: ("LOCK01.3O", 1.2),  # Gate lock: shot to open (PROCESS 'destroy' link on its cell)
 }
 # Model files that PROCESS 'move'/'xmove'/'ymove' can carry (the object's cell is the move target).
 # Such objects are not static props: they are movers, driven by their proc (see mover records).
@@ -735,6 +736,7 @@ def build_models_pack():
         ("SWORD.3O",    1.2),  # 35: Projectile / Rocket / Bolt
         PROP_MODEL_SPECS[36],  # 36: Moving star platform
         PROP_MODEL_SPECS[37],  # 37: Moving V platform
+        PROP_MODEL_SPECS[38],  # 38: Gate lock (shot to open)
     ]
 
     all_models = []
@@ -802,7 +804,7 @@ DOOR_CLOSED_GAP = 0  # closed door: ceiling level with the floor, so the door fr
 
 
 # Trigger kinds stored in procs{N}.bin (ids match GameWorld.TRIG_*).
-PROC_TRIG_IDS = {'link': 0, 'floor': 1, 'return': 2, 'onofflink': 3}
+PROC_TRIG_IDS = {'link': 0, 'floor': 1, 'return': 2, 'onofflink': 3, 'destroy': 4}
 PROC_KEY_IDS = {'green': 1, 'red': 2, 'blue': 3}
 
 
@@ -813,7 +815,8 @@ def load_proc_defs(map_num):
               Moved cells become door sectors whose ceiling rises when the proc opens.
     ups:      (x, y) -> H for 'up' cells (a transparent wall rising by H points).
     triggers: (kind, x, y): kind 0 'link' (proximity), 1 'floor' (step on),
-              2 'return' (reset the proc), 3 'onofflink' (proximity, toggles).
+              2 'return' (reset the proc), 3 'onofflink' (proximity, toggles),
+              4 'destroy' (the 3O lock on that cell is shot: unlocks and opens the proc).
               Taken from the #links section and from LinkSwitchAt.
     unlocks:  proc ids from 'unlock N' actions.
     key:      0 none, 1 green, 2 red, 3 blue (Greenlock/Redlock/Bluelock or GreenKey/...).
@@ -1008,6 +1011,8 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
                     cell_ceil_low[(cx, cy)] = 84
                 elif "BAREL" in mfname:
                     raw_props.append((30, wx0, wy0, unk & 7))
+                elif mfname == "LOCK01.3O":
+                    raw_props.append((38, wx0, wy0, unk & 7))
                 elif "FARAON" in mfname:
                     raw_props.append((31, wx0, wy0, unk & 7))
                 elif any(s in mfname for s in ("OBELISK", "COLUMN", "COLU_", "PIER", "PALM", "VASE")):
@@ -1276,9 +1281,11 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 
     valid_props = []
     for ptype, fx, fy, pang in raw_props:
-        if (int(fx), int(fy)) in visited and math.hypot(fx - spawn_fx, fy - spawn_fy) > 1.5:
-            valid_props.append((ptype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE), pang))
-    for idx_p in range(0 if valid_props else min(8, len(sector_centers))):
+        if ptype == 38 or (int(fx), int(fy)) in visited:
+            if math.hypot(fx - spawn_fx, fy - spawn_fy) > 1.5:
+                valid_props.append((ptype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE), pang))
+    valid_props.sort(key=lambda r: 0 if r[0] == 38 else 1)   # locks first: the 16-prop cap must not drop them
+    for idx_p in range(0 if any(r[0] != 38 for r in valid_props) else min(8, len(sector_centers))):
         cx, cy = sector_centers[(idx_p * 4 + 2) % len(sector_centers)]
         ptype = 30 if (idx_p % 2 == 0) else (31 if level_idx >= 2 else 32)
         valid_props.append((ptype, int((cx - 32.0) * SCALE) - 20, int((cy - 32.0) * SCALE) + 20, idx_p & 7))
@@ -1316,7 +1323,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     #   >H proc count, then per proc:
     #     >BBBHHBBB  id, key (0 none,1 green,2 red,3 blue), flags (1 locked, 2 checkback, 4 toggle),
     #                startdelay (tenths of a second), backwait (tenths), speed, onmsg, lockmsg
-    #     >B trigger count, then >BBB kind (0 link,1 floor,2 return,3 onofflink), x, y
+    #     >B trigger count, then >BBB kind (0 link,1 floor,2 return,3 onofflink,4 destroy), x, y
     #     >B unlock count, then >B proc ids
     #     >B cell count, then >BBHH per cell: x, y, sectorId, openCeil (up cells: floor + H)
     #   >B message count, then per message: >BB id, length, ASCII bytes
@@ -1378,6 +1385,19 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 # (add_engineered_steps_and_walls). Level 4 was drawn by hand (build_level4_sanctum). None of
 # this is not game data.
 LEGACY_DIR = os.path.join(ROOT_DIR, "tools", "legacy")
+# (level index in the game, legacy map number, source MAP for textures, or None for a fixed list)
+LEGACY_LEVELS = [
+    (4, 4, None),   # level 4: Time Chasm Sanctum (map4.bin), not game data
+]
+
+# Wall texture names of the first build's level 4 (build_level4_sanctum in b8d28e9).
+SANCTUM_WALL_NAMES = [
+    "ALIENB01", "ALIENG01", "ALIENG02", "BLWALL01", "BLWALL02", "BLWALL03",
+    "BRED02", "BRED03", "BRED04", "DMET01", "DMET02", "F_BORD01",
+    "GATE01", "GATE02", "GBLOCK1", "GBLOCK2", "P_BAM64", "P_FR56",
+    "P_STFR", "BRICKW1", "BRICKW2", "FENCE01", "BOX01", "BOX02",
+]
+
 
 
 def parse_legacy_map(data):
@@ -1670,11 +1690,26 @@ def compile_legacy_level(level_idx, legacy_no, wall_names, floor_fids, floors_bl
           f"monsters={len(monsters)}, items={len(items)}, props={len(props)}, c3b={info['total_size']}B")
 
 
+def build_legacy_levels():
+    for level_idx, legacy_no, source_map in LEGACY_LEVELS:
+        if source_map is None:
+            wall_names = SANCTUM_WALL_NAMES
+            floor_fids = list(range(12))
+            floors_blob = csm.read("FLOORS.06")
+            label = "first build level 4, fixed texture list"
+        else:
+            wall_names, floor_fids = legacy_texture_lists(source_map)
+            floors_blob = csm.read(f"FLOORS.{source_map:02d}")
+            label = f"first build level {legacy_no}, textures of MAP.{source_map:02d}"
+        compile_legacy_level(level_idx, legacy_no, wall_names, floor_fids, floors_blob, label)
+
+
 def build_all_levels():
     compile_chasm_map_to_c3b(1, 1, max_cells=2000)
     compile_chasm_map_to_c3b(2, 5, max_cells=2000)
     compile_chasm_map_to_c3b(3, 6, max_cells=2000)
-    # MAP.99 is the briefing background (not playable). The first-build levels were removed.
+    # MAP.99 is the briefing background (not playable). Level 4 is the first build's Time Chasm Sanctum.
+    build_legacy_levels()
 
 
 # ---------------------------------------------------------------------------

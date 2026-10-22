@@ -776,7 +776,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.drawString("CONTROLS & HELP", scrW >> 1, 12, Graphics.TOP | Graphics.HCENTER);
 
         String[] keys = {
-            "2 / 8", "4 / 6", "1 / 3", "5", "9", "* / #", "0", "SOFT"
+            "2 / 8", "4 / 6", "1 / 3", "5", "9", "7", "* / #", "0", "SOFT"
         };
         String[] acts = {
             "Forward / back",
@@ -784,11 +784,13 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             "Strafe left / right",
             "Fire & dismember",
             "Level map (toggle)",
+            "Open nearest door",
             "Previous / next weapon",
             "Jump",
             "Pause menu"
         };
-        // Doors, gates, switches and the level exit open on touch: there is no use key.
+        // Doors, gates, switches and the level exit open on touch; key 7 is a manual fallback
+        // that opens the nearest door (locks still apply).
         g.setFont(plain);
         int y = 36;
         for (int i = 0; i < keys.length; i++) {
@@ -802,7 +804,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.setColor(0x9A9A88);
         g.drawString("TIP: aim at the enemy and fire;", 14, y + 8, Graphics.TOP | Graphics.LEFT);
         g.drawString("sever arms & head for bonus kills.", 14, y + 24, Graphics.TOP | Graphics.LEFT);
-        g.drawString("Clear every enemy, then press 7.", 14, y + 40, Graphics.TOP | Graphics.LEFT);
+        g.drawString("Clear every enemy, then reach the exit.", 14, y + 40, Graphics.TOP | Graphics.LEFT);
         g.drawString("Pause > DEV MODE: god mode, position,", 14, y + 62, Graphics.TOP | Graphics.LEFT);
         g.drawString("FPS and LIMBS shown at the top.", 14, y + 78, Graphics.TOP | Graphics.LEFT);
 
@@ -907,6 +909,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             case KEY_NUM5: kFire = true; break;
             case KEY_NUM9: showAutomap = !showAutomap; break;
             case KEY_NUM0: world.triggerJump(); break;
+            case KEY_NUM7: world.manualOpenDoor(); break;
             case KEY_STAR: world.switchWeapon(-1); break;
             case KEY_POUND: world.switchWeapon(1); break;
             default:

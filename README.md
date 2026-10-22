@@ -6,7 +6,7 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 
 1. **C3D2/C3B BSP-Portal World Renderer (`PortalRenderer`)**:
    - Adapted from `CovertOps3D-RE`'s BSP-portal engine (`PortalRenderer`, `CustomLevelLoader`, `CustomMaterialSet`, `BSPNode`, `Sector`, `WallDefinition`, `RenderUtils`).
-  - Compiles the playable levels into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level3.c3b`) with `0` BSP partition mismatches. Levels 1–3 come from `CSM.BIN` (`MAP.01` → "Power Station", `MAP.05` → "Around Pyramids", `MAP.06` → "Pyramid of Shmuher"). `MAP.99` is the briefing background and is not built.
+  - Compiles the playable levels into T-junction-free `C3B1` binary BSP-portal packages (`/res/levels/level1.c3b` .. `/res/levels/level4.c3b`) with `0` BSP partition mismatches. Levels 1–3 come from `CSM.BIN` (`MAP.01` → "Power Station", `MAP.05` → "Around Pyramids", `MAP.06` → "Pyramid of Shmuher"). `MAP.99` is the briefing background and is not built.
    - Textures follow each map's own IDs: a wall tile ID is looked up in the map's `#GFX` table in `RESOURCE.XX` (e.g. `19` → `sewer01.cel`) and the matching PNG from `tex.zip` is used, or the original `.CEL` from `CSM.BIN` when no PNG exists. Floor and ceiling values index the 64 tiles of `FLOORS.XX`. Each level has its own `/res/textures/custom/L<n>/materials.c3m`; the BMP4 textures themselves are shared under `/res/textures/custom/shared/`. Textures are 16-colour 4-bit `BMP4`; tall 64×128 walls are squashed to 64×64.
 
 2. **Software 3D Polygon Renderer Without a Z-Buffer (`PolyRenderer3D`)**:
@@ -42,6 +42,7 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 | 4 / 6 | Turn left / right |
 | 1 / 3 | Strafe left / right |
 | 5 | Fire |
+| 7 | Open the nearest door or switch (fallback if the automatic opening fails; locks still apply) |
 | 9 | Level map (automap) toggle; the player is a triangle pointing where you face |
 | * / # | Previous / next weapon |
 | 0 | Jump |
@@ -94,6 +95,9 @@ The HP and blast values above are the values chosen for this port. They were not
 There is no use key. Doors, gates, switches and the exit work on touch, as in the original game. `tools/build_assets.py` compiles each map's `PROCESS.XX` (parsed by `tools/parse_process.py`, including the `#links` section) into `res/levels/procs{N}.bin`.
 
 - **Triggers** (from `#links` and `LinkSwitchAt`): `link` fires when the player comes within one cell (3x3 block), `floor` when the player steps on the cell, `onofflink` the same as `link` but a second touch closes the proc, and `return` resets the proc to its start state.
+- **Floor links** fire when the player's circle touches the trigger cell (radius 24 units), as in the original, so a door whose floor link sits in its own cell opens when the player bumps it from outside.
+- **Destroy links** (`destroy X Y N`) are fired by shooting the gate lock (`LOCK01.3O`, prop model 38) on cell X,Y: hitscan and projectiles both damage it (60 HP). When it breaks, proc N unlocks and opens, ignoring keys, as in `ProcedureProcessDestroy`.
+- **Manual use (key 7):** opens the nearest door or switch within two cells, with the usual lock checks. Far from any door it shows `NO DOOR NEAR`. This is a fallback for the automatic opening, and it goes against the no-use-key rule above only for this key.
 - **Activation** follows the original engine (`Chasm-Reverse`, `ProcedureProcess*`). A proc runs only if it is unlocked, or if the key it needs (green, red or blue) is held. `Lock` is removed by an `unlock N` action from another proc. A refused touch is retried every tick while the player stays in range, so a key picked up nearby opens the door.
 - **Doors** are sectors whose ceiling is level with the floor when closed (blocks the player) and rises to the open height. `StartDelay` and `BackWait` are in seconds (converted at 28 ticks per second). `BackWait 0` means the door never returns. A door never closes on the player: it waits until the player leaves its cells.
 - **Gates** (`up X Y H`) raise a transparent wall by H, so the cell opens to floor + H.
@@ -102,7 +106,7 @@ There is no use key. Doors, gates, switches and the exit work on touch, as in th
 
 - **Moving platforms** (`move`, `xmove`, `ymove` on a cell that holds a 3O model, for example `MAP.06` procs 2, 3 and 16). Their model is not a static prop: it is a prop box that the proc moves (see below).
 
-Not implemented: `destroy` links (shooting an object to open a proc, for example `MAP.01` proc 1 at (22,55), so that door stays shut), `shoot` links, `rotate`, `light`, `playani`, `waitout`, `death`, and vertical lifts. In the `CSM.BIN` data, the `up` action only raises fence and frame walls; no lift platform uses it. These are parsed and ignored.
+Not implemented: `shoot` links, `rotate`, `light`, `playani`, `waitout`, `death`, and vertical lifts. Four rotating doors/walls therefore never move: `MAP.01` proc 3 (house with window) and proc 18 (restricted area #1), and `MAP.06` proc 18 and proc 26. Rotating walls need a sector-geometry change, which the C3B build does not provide yet. In the `CSM.BIN` data, the `up` action only raises fence and frame walls; no lift platform uses it. These are parsed and ignored.
 
 ### Moving platforms
 
@@ -123,16 +127,18 @@ The `CSM.BIN` used by this build has four maps: `MAP.01`, `MAP.05`, `MAP.06` and
 | 2 | MAP.05 | Around Pyramids | red (`KEY.3O`) |
 | 3 | MAP.06 | Pyramid of Shmuher | red (`KEY.3O`) |
 
-The first-build levels (`b8d28e9`, PR #1) have been removed from the game. The grid-to-C3B converter stays in `tools/build_assets.py` (`parse_legacy_map`, `compile_legacy_level`) as a tool, but no grid maps are bundled and the build does not use it.
+| 4 | first build `map4` | Time Chasm Sanctum (hand-made, **not game data**) | none |
+
+Level 4 is the hand-made "Time Chasm Sanctum" of the first build (`b8d28e9`, PR #1), restored from `tools/legacy/map4.bin` and compiled by `build_legacy_levels`. The first build's levels 1–3 (grid copies of MAP.01/05/06) and its level 4 copy of MAP.01 stay removed. The grid-to-C3B converter (`parse_legacy_map`, `compile_legacy_level`) is in `tools/build_assets.py`.
 
 Keys are pickups (models 27 red, 28 green, 29 blue). The converter places them first and never cuts them from the item list, so a level keeps its keys even when it has more than 48 pickups.
 
 ## Known limitations
 
-- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels from the data. Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
+- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels from the data, plus level 4 (the Sanctum, not game data). Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
 
-- Only links (proximity, floor, toggle, return), `unlock` chains, doors, gates (`up`) and moving platforms are executed from `PROCESS.XX`. Shot-to-open (`destroy`, `shoot`), rotating parts, lights and animations are not.
-- A closed door keeps an open upper frame: its ceiling is level with the floor, but the portal above it is not textured yet, so a black void shows above the closed door.
+- Only links (proximity, floor, toggle, return, destroy on the gate lock), `unlock` chains, doors, gates (`up`) and moving platforms are executed from `PROCESS.XX`. `shoot` links (walls), rotating parts (see Doors), lights and animations are not.
+- Door textures are not verified. In a render of L1 `MAP.01` proc 8 (helipad door) the closed door shows as a black column where the door is, and the open door shows the stone texture. The cause is not fixed yet. Door wall textures come from the nearest wall object (`cell_wall_tex`, 3×3 stamp), so a door can take a neighbour's texture.
 - The automap (key 9) has not been checked on a device.
 - The full-area geometry has not been measured on a device. Frame rate and memory with 150–230 sectors are unknown.
 - Some portal walls still show angle-dependent distortion; the root cause has not been isolated.

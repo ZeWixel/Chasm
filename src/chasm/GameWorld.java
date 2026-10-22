@@ -39,7 +39,7 @@ public final class GameWorld {
     // Levels 1-3: MAP.01, MAP.05, MAP.06 of the CSM.BIN used by this build (MAP.99 is the briefing
     // background, not a mission). Levels 4-7: the first build's four grid levels (tools/legacy),
     // with the steps and walls that were added by hand there. They are not game data.
-    public static final int NUM_LEVELS = 3;
+    public static final int NUM_LEVELS = 4;
     public static final String[] LEVEL_NAMES = {
         "THE POWER STATION",
         "AROUND PYRAMIDS",
@@ -431,6 +431,16 @@ public final class GameWorld {
     public static final int TRIG_FLOOR = 1;      // stepped on (the cell itself)
     public static final int TRIG_RETURN = 2;     // resets the proc to its start state
     public static final int TRIG_ONOFF = 3;      // proximity; a second touch closes it
+    public static final int TRIG_DESTROY = 4;    // a shot destroys the gate lock on its cell (no proximity)
+    /** Gate lock prop (models.bin id 38): shot to open. */
+    public static final int LOCK_MODEL = 38;
+    public static final int LOCK_HP = 60;
+    /**
+     * Squared radius (world units, 24 units = 0.25 cell) within which the player touches a floor
+     * trigger's cell. The original uses the player radius (60/256 cell) against the cell square, so
+     * a floor cell in a closed door is touched when the player bumps the door from outside.
+     */
+    private static final int FLOOR_TOUCH_R2 = 24 * 24;
     private static final int PROC_LOCKED = 1;
     private static final int PROC_CHECKBACK = 2;
     private static final int PROC_TOGGLE = 4;
@@ -591,6 +601,17 @@ public final class GameWorld {
         return Math.abs(x - cx) <= 1 && Math.abs(y - cz) <= 1;
     }
 
+    /** True if the player's circle (16.16 world position) touches the square of cell (x, y). */
+    private static boolean touchesCell(int fx, int fz, int x, int y) {
+        int px = fx >> 16;
+        int pz = fz >> 16;
+        int x0 = (x - 32) * CELL_UNITS;
+        int z0 = (y - 32) * CELL_UNITS;
+        int dx = px < x0 ? x0 - px : (px > x0 + CELL_UNITS ? px - x0 - CELL_UNITS : 0);
+        int dz = pz < z0 ? z0 - pz : (pz > z0 + CELL_UNITS ? pz - z0 - CELL_UNITS : 0);
+        return dx * dx + dz * dz <= FLOOR_TOUCH_R2;
+    }
+
     private int procIndex(int pid) {
         for (int p = 0; p < procCount; p++) {
             if (procId[p] == pid) return p;
@@ -670,6 +691,17 @@ public final class GameWorld {
             }
             return false;
         }
+        openProc(p);
+        return true;
+    }
+
+    /**
+     * The activation half of a touch: on-message, the 'unlock' actions of this proc, and the start
+     * of its movement. Shared by triggerProc (keys/locks already checked) and destroyProc.
+     */
+    private void openProc(int p) {
+        int st = procState[p];
+        boolean active = st == DSTATE_DELAY || st == DSTATE_OPENING || st == DSTATE_OPEN;
         int om = procOnMsg[p];
         if (om != 0 && procMsg[om] != null) setMessage(procMsg[om], 60);
         int[] unl = procUnlock[p];
@@ -679,13 +711,57 @@ public final class GameWorld {
         }
         if (active) {
             if (st == DSTATE_OPEN && procBackWait[p] > 0) procTimer[p] = procBackWait[p];
-            return true;
+            return;
         }
         if (procCell[p].length > 0 || procMoves[p]) {
             procState[p] = procDelay[p] > 0 ? DSTATE_DELAY : DSTATE_OPENING;
             procTimer[p] = procDelay[p];
         }
-        return true;
+    }
+
+    /**
+     * The original's 'destroy' link (ProcedureProcessDestroy): shooting the 3O on the link's cell
+     * clears the proc's lock and opens it. Keys are not checked.
+     */
+    private void destroyProc(int p) {
+        procFlags[p] &= ~PROC_LOCKED;
+        openProc(p);
+    }
+
+    /**
+     * Manual use (key 7): acts as a touch on the nearest door or switch within two cells. Locks
+     * and keys are checked as usual, so a locked door still refuses with its message.
+     */
+    public void manualOpenDoor() {
+        if (sectors == null) return;
+        int cx = cellOf(playerBody.x);
+        int cz = cellOf(playerBody.z);
+        int best = -1;
+        int bestD = 3;
+        for (int p = 0; p < procCount; p++) {
+            if (procMoves[p]) continue;
+            int d = 99;
+            int[] cells = procCell[p];
+            for (int c = 0; c < cells.length; c += 4) d = Math.min(d, cellDistance(cx, cz, cells[c], cells[c + 1]));
+            int[] tr = procTrig[p];
+            for (int t = 0; t < tr.length; t += 3) {
+                if (tr[t] == TRIG_RETURN || tr[t] == TRIG_DESTROY) continue;
+                d = Math.min(d, cellDistance(cx, cz, tr[t + 1], tr[t + 2]));
+            }
+            if (d < bestD) {
+                bestD = d;
+                best = p;
+            }
+        }
+        if (best < 0) {
+            setMessage("NO DOOR NEAR", 40);
+            return;
+        }
+        triggerProc(best, TRIG_LINK);
+    }
+
+    private static int cellDistance(int ax, int az, int bx, int bz) {
+        return Math.max(Math.abs(ax - bx), Math.abs(az - bz));
     }
 
     /** Sets the ceilings of a proc's cells for its current stage (closed = floor + gap). */
@@ -756,7 +832,9 @@ public final class GameWorld {
                 int kind = tr[t * 3];
                 int x = tr[t * 3 + 1];
                 int y = tr[t * 3 + 2];
-                boolean inside = kind == TRIG_FLOOR ? (cx == x && cz == y) : cellNear(x, y, cx, cz);
+                if (kind == TRIG_DESTROY) continue;   // fired by a shot (destroyLocksAt)
+                boolean inside = kind == TRIG_FLOOR ? touchesCell(playerBody.x, playerBody.z, x, y)
+                        : cellNear(x, y, cx, cz);
                 if (!inside) {
                     in[t] = false;
                 } else if (!in[t]) {
@@ -975,7 +1053,7 @@ public final class GameWorld {
                 itemSector[i] = getSectorAtPoint(itemX[i], itemZ[i]);
             }
 
-            // Props: >H count, then >BhhB (modelId 30..32, px, pz, pang)
+            // Props: >H count, then >BhhB (modelId 30..32 or 38 gate lock, px, pz, pang)
             int pCount = dis.readUnsignedShort();
             this.propCount = pCount < MAX_PROPS ? pCount : MAX_PROPS;
             for (int i = 0; i < pCount; i++) {
@@ -987,9 +1065,9 @@ public final class GameWorld {
                 int halfZ = dis.readShort();
                 if (i >= MAX_PROPS) continue;
 
-                if (modelId < 30 || modelId > 32) modelId = 30 + (i % 3);
+                if (modelId != LOCK_MODEL && (modelId < 30 || modelId > 32)) modelId = 30 + (i % 3);
                 propActive[i] = true;
-                propHP[i] = BARREL_HP;
+                propHP[i] = modelId == LOCK_MODEL ? LOCK_HP : BARREL_HP;
                 propHalfX[i] = halfX << 16;
                 propHalfZ[i] = halfZ << 16;
                 propModelId[i] = modelId;
@@ -1327,10 +1405,10 @@ public final class GameWorld {
             }
         }
 
-        // Barrels are targets too. A barrel only counts if it is nearer than the best monster.
+        // Barrels and gate locks are targets too. A prop only counts if it is nearer than the best monster.
         int bestProp = -1;
         for (int p = 0; p < propCount; p++) {
-            if (!isBarrel(p)) continue;
+            if (!isShootable(p)) continue;
             int rx = propX[p] - playerBody.x;
             int rz = propZ[p] - playerBody.z;
             int viewX = (int) (((long) cos * rx - (long) sin * rz) >> 16);
@@ -1345,7 +1423,7 @@ public final class GameWorld {
         }
 
         if (bestProp >= 0) {
-            damageBarrel(bestProp, damage);
+            damageProp(bestProp, damage);
         } else if (bestMon >= 0) {
             damageMonster(bestMon, damage);
         }
@@ -1354,6 +1432,42 @@ public final class GameWorld {
     /** True if prop p is a live explosive barrel. */
     public boolean isBarrel(int p) {
         return p >= 0 && p < propCount && propActive[p] && propModelId[p] == BARREL_MODEL;
+    }
+
+    /** True if prop p is a live gate lock (shot to open its 'destroy' proc). */
+    public boolean isLock(int p) {
+        return p >= 0 && p < propCount && propActive[p] && propModelId[p] == LOCK_MODEL;
+    }
+
+    /** True if a shot or projectile can damage prop p (barrels and gate locks). */
+    public boolean isShootable(int p) {
+        return isBarrel(p) || isLock(p);
+    }
+
+    /** Damages a shootable prop: a barrel may explode; a lock that breaks fires its 'destroy' procs. */
+    public void damageProp(int p, int dmg) {
+        if (isLock(p)) {
+            propHP[p] -= dmg;
+            if (propHP[p] <= 0) {
+                propActive[p] = false;
+                destroyLocksAt(cellOf(propX[p]), cellOf(propZ[p]));
+            }
+        } else {
+            damageBarrel(p, dmg);
+        }
+    }
+
+    /** Opens every proc whose 'destroy' link is on cell (cx, cz) (the lock there was shot). */
+    private void destroyLocksAt(int cx, int cz) {
+        for (int p = 0; p < procCount; p++) {
+            int[] tr = procTrig[p];
+            for (int t = 0; t < tr.length; t += 3) {
+                if (tr[t] == TRIG_DESTROY && tr[t + 1] == cx && tr[t + 2] == cz) {
+                    destroyProc(p);
+                    break;
+                }
+            }
+        }
     }
 
     /** Applies damage to barrel p. A barrel at 0 HP explodes and may set off barrels nearby. */
@@ -1833,11 +1947,11 @@ public final class GameWorld {
                 }
                 if (!hit) {
                     for (int p = 0; p < propCount; p++) {
-                        if (!isBarrel(p)) continue;
+                        if (!isShootable(p)) continue;
                         if (Math.abs(nx - propX[p]) < hitRadius + propHalfX[p]
                                 && Math.abs(nz - propZ[p]) < hitRadius + propHalfZ[p]) {
                             projActive[i] = false;
-                            damageBarrel(p, projDamage[i]);
+                            damageProp(p, projDamage[i]);
                             break;
                         }
                     }
