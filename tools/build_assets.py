@@ -893,6 +893,51 @@ def cell_xy_to_units_mover(fx, fy):
     return int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE)
 
 
+def subcell_reach(visited, spawn, segments, sub=8):
+    """Cells that hold a sub-cell reachable from the spawn, with the segments as walls.
+
+    visited:  walkable cells (x, y). spawn: (x, y) in cell units. segments: ((x0, y0), (x1, y1))
+    in 1/256 cell units. A wall blocks its sub-cells and their neighbours (a gap narrower than
+    about a quarter cell is closed, as a player body does not fit through it).
+    """
+    n = 64 * sub
+    free = bytearray(n * n)
+    for (cx, cy) in visited:
+        for i in range(sub):
+            b = (cx * sub + i) * n + cy * sub
+            free[b:b + sub] = b'\x01' * sub
+    for (a, b) in segments:
+        ax, ay = a[0] / 256.0 * sub, a[1] / 256.0 * sub
+        bx, by = b[0] / 256.0 * sub, b[1] / 256.0 * sub
+        steps = max(1, int(max(abs(bx - ax), abs(by - ay)) * 4))
+        for k in range(steps + 1):
+            t = k / float(steps)
+            ix, iy = int(ax + (bx - ax) * t), int(ay + (by - ay) * t)
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    x, y = ix + di, iy + dj
+                    if 0 <= x < n and 0 <= y < n:
+                        free[x * n + y] = 0
+    start = int(spawn[0] * sub) * n + int(spawn[1] * sub)
+    seen = bytearray(n * n)
+    reach = set()
+    if not free[start]:
+        return reach
+    seen[start] = 1
+    q = deque([start])
+    while q:
+        p = q.popleft()
+        x, y = divmod(p, n)
+        reach.add((x // sub, y // sub))
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < n and 0 <= ny < n:
+                np_ = nx * n + ny
+                if free[np_] and not seen[np_]:
+                    seen[np_] = 1
+                    q.append(np_)
+    return reach
+
+
 def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     mdata = csm.read(f"MAP.{map_num:02d}")
     rdata = csm.read(f"RESOURCE.{map_num:02d}").decode("ascii", errors="ignore")
@@ -1234,12 +1279,56 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     out_c3b = os.path.join(LEVELS_DIR, f"level{level_idx}.c3b")
     c3d2_core.dump_c3b(lvl, f"/textures/custom/L{level_idx}/materials.c3m", out_c3b, None)
 
+    # Static thin walls (kind 2, no proc, always solid): every other thin wall (tid < 128) between
+    # walkable cells. The baked geometry only has walls on the edges of sector rectangles, so a thin
+    # wall inside a rectangle is missing, and one that splits two rectangles is only a portal.
+    # Walls on the edge of a solid or unreachable cell are already baked, and walls touching a
+    # door, rotating or moving cell belong to that proc, so they are skipped.
+    proc_cells = set(mover_cells)
+    for pid in procs:
+        proc_cells.update(procs[pid]['cells'])
+        proc_cells.update((rx, ry) for (rx, ry, _pcx, _pcy, _ang) in procs[pid]['rotates'])
+    static_panels = []
+    static_segments = []
+    for gx in range(64):
+        for gy in range(64):
+            w = mdata[walls_off_of(gx, gy):walls_off_of(gx, gy) + 11]
+            tid, _sz, _unk, c00, c01, c10, c11 = struct.unpack("<3B4H", w)
+            if not (0 < tid < 128):
+                continue
+            if (gx, gy) in proc_cells:
+                continue
+            if c00 == c10 and c01 != c11 and c00 % 256 == 0:
+                # Vertical line on the grid, x = c00 / 256: between cells x - 1 and x
+                line_x = c00 // 256
+                cy_side = min(c01, c11) // 256
+                sides = [(line_x - 1, cy_side), (line_x, cy_side)]
+            elif c01 == c11 and c00 != c10 and c01 % 256 == 0:
+                # Horizontal line on the grid, y = c01 / 256: between cells y - 1 and y
+                line_y = c01 // 256
+                cx_side = min(c00, c10) // 256
+                sides = [(cx_side, line_y - 1), (cx_side, line_y)]
+            else:
+                sides = [(gx, gy)]
+            if any(c in proc_cells or not (0 <= c[0] < 64 and 0 <= c[1] < 64) for c in sides):
+                continue
+            if not all(c in visited for c in sides):
+                continue
+            static_panels.append((2, 255, wall_slot.get(tid, default_wall), (c00, c01), (c10, c11), None, 0))
+            static_segments.append(((c00, c01), (c10, c11)))
+    # Cells the player can reach from the spawn with these walls in place (sub-cell flood fill).
+    # Monsters, items and the exit are only placed in these cells: a monster the player cannot
+    # reach would keep the level from ending.
+    play = subcell_reach(visited, (spawn_fx, spawn_fy), static_segments)
+    print(f"[OK] MAP.{map_num:02d}: {len(static_panels)} static thin walls; reachable cells "
+          f"{len(play)} of {len(visited)}")
+
     # Filter monsters, items, and props to visited sectors (or place inside sector centers)
     sector_centers = []
     for (x0, y0, x1, y1, sky, fstep) in rects:
         cx = (x0 + x1) * 0.5
         cy = (y0 + y1) * 0.5
-        if math.hypot(cx - spawn_fx, cy - spawn_fy) > 2.2:
+        if math.hypot(cx - spawn_fx, cy - spawn_fy) > 2.2 and (int(cx), int(cy)) in play:
             sector_centers.append((cx, cy))
 
     # Place signature guard monster directly in front of player spawn along open corridor
@@ -1248,7 +1337,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     lead_mz = int(((spawn_fy + fwd_dy * 1.4) - 32.0) * SCALE)
     valid_monsters = [(lead_mtype, lead_mx, lead_mz, 0)]
     for mtype, fx, fy, mang in raw_monsters:
-        if (int(fx), int(fy)) in visited and math.hypot(fx - spawn_fx, fy - spawn_fy) > 1.8:
+        if (int(fx), int(fy)) in play and math.hypot(fx - spawn_fx, fy - spawn_fy) > 1.8:
             valid_monsters.append((mtype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE), mang))
     # Ensure a rich roster of monsters across sectors
     while len(valid_monsters) < 16 and sector_centers:
@@ -1263,7 +1352,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     def near_visited(cx, cy):
         # An object can sit on the edge of a solid cell (its own cell is not walkable); it is
         # reachable if a walkable cell of the flood fill is next to it.
-        return any((cx + dx, cy + dy) in visited for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+        return any((cx + dx, cy + dy) in play for dx in (-1, 0, 1) for dy in (-1, 0, 1))
 
     key_items = []
     map_items = []
@@ -1381,6 +1470,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
             if 0 < tid < 128:
                 panels.append((1, pid, wall_slot.get(tid, default_wall), (c00, c01), (c10, c11),
                                (pcx, pcy), ang))
+    panels.extend(static_panels)
     print(f"[OK] MAP.{map_num:02d}: {len(panels)} panels "
           f"({sum(1 for q in panels if q[0] == 1)} rotating)")
     # Panel records: >H count, then >BBB kind, proc id, slot and >hhhhhhh x0, y0, x1, y1

@@ -951,7 +951,7 @@ public final class GameWorld {
     // is cut by the portal clipping like any other wall. A door panel is solid only while its proc
     // is closed (stage 0); the portal walls between the door and its neighbours are hidden then, so
     // the panel is the door's face. A rotating panel turns about its pivot with the proc stage.
-    private static final int MAX_PANELS = 160;
+    private static final int MAX_PANELS = 400;
     private static final int PANEL_KIND_DOOR = 0;
     private static final int PANEL_KIND_ROTATE = 1;
     /** Sample distance past each side of a panel, to find the sector it stands in (0.75 cell). */
