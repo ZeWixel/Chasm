@@ -37,18 +37,29 @@ public final class GameWorld {
 
     // ==================== Chasm Gameplay Constants ====================
     // Levels 1-3: MAP.01, MAP.05, MAP.06 of the CSM.BIN used by this build (MAP.99 is the briefing
-    // background, not a mission). Levels 4-7: the first build's four grid levels (tools/legacy),
-    // with the steps and walls that were added by hand there. They are not game data.
+    // background, not a mission). Level 4: the first build's "Pyramid of Shmuher" (grid map 3 in
+    // tools/legacy, with the steps and walls added by hand there). It is not game data.
     public static final int NUM_LEVELS = 4;
+    /** Full level names (level index 0..3). The menu adds the number: "4 PYRAMID OF SHMUHER". */
     public static final String[] LEVEL_NAMES = {
         "THE POWER STATION",
         "AROUND PYRAMIDS",
         "PYRAMID OF SHMUHER",
-        "FIRST BUILD: POWER STATION",
-        "FIRST BUILD: AROUND PYRAMIDS",
-        "FIRST BUILD: PYRAMID OF SHMUHER",
-        "FIRST BUILD: TIME CHASM SANCTUM"
+        "SHMUHER (FIRST BUILD)"
     };
+    /** Short names for places where the full name does not fit a 240-pixel menu line. */
+    public static final String[] LEVEL_SHORT_NAMES = {
+        "POWER STATION",
+        "PYRAMIDS",
+        "SHMUHER",
+        "SHMUHER 1ST BUILD"
+    };
+
+    /** Level label with its number, e.g. "4 SHMUHER (FIRST BUILD)" (number = level index + 1). */
+    public static String levelLabel(int levelIndex, boolean shortName) {
+        String name = shortName ? LEVEL_SHORT_NAMES[levelIndex] : LEVEL_NAMES[levelIndex];
+        return (levelIndex + 1) + " " + name;
+    }
 
     /** Music track (SoundManager: 1..4 = mus_lvl1..4) for a 0-based level index. */
     public static int musicTrackFor(int levelIndex) {
@@ -75,28 +86,10 @@ public final class GameWorld {
             "the chambers and move on."
         },
         {
-            "FIRST BUILD 1: POWER STATION",
-            "Layout of the first build with",
-            "hand-made steps and walls (not",
-            "game data). Reach the exit."
-        },
-        {
-            "FIRST BUILD 2: AROUND PYRAMIDS",
-            "Layout of the first build with",
-            "hand-made steps and walls (not",
-            "game data). Reach the exit."
-        },
-        {
-            "FIRST BUILD 3: PYRAMID OF SHMUHER",
-            "Layout of the first build with",
-            "hand-made steps and walls (not",
-            "game data). Reach the exit."
-        },
-        {
-            "FIRST BUILD 4: TIME CHASM SANCTUM",
-            "Hand-drawn sanctum of the first",
-            "build (not game data). Find the",
-            "way to the exit portal."
+            "MISSION 4: SHMUHER (1ST BUILD)",
+            "First-build layout of the pyramid",
+            "with hand-made steps and walls",
+            "(not game data). Reach the exit."
         }
     };
 
@@ -729,7 +722,7 @@ public final class GameWorld {
     }
 
     /**
-     * Manual use (key 7): acts as a touch on the nearest door or switch within two cells. Locks
+     * Manual use (key 7): acts as a touch on the nearest door or switch within one cell. Locks
      * and keys are checked as usual, so a locked door still refuses with its message.
      */
     public void manualOpenDoor() {
@@ -737,7 +730,7 @@ public final class GameWorld {
         int cx = cellOf(playerBody.x);
         int cz = cellOf(playerBody.z);
         int best = -1;
-        int bestD = 3;
+        int bestD = 2;   // one cell: the door, its trigger cell, or a cell next to it
         for (int p = 0; p < procCount; p++) {
             if (procMoves[p]) continue;
             int d = 99;
@@ -987,7 +980,7 @@ public final class GameWorld {
         hasRedKey = false;
         hasBlueKey = false;
 
-        setMessage(LEVEL_NAMES[levelIndex], 45);
+        setMessage(levelLabel(levelIndex, true), 45);
     }
 
     private void loadEntitiesSidecar(String entPath) {

@@ -5,6 +5,6 @@ MIDlet-Icon: /icon.png
 MIDlet-Description: 3D FPS with C3D2 portal renderer and polygonal 3D entities for Nokia S60 & Sony Ericsson
 MIDlet-1: Chasm: The Rift, /icon.png, chasm.ChasmMIDlet
 MIDlet-Jar-URL: ChasmTheRift.jar
-MIDlet-Jar-Size: 1115890
+MIDlet-Jar-Size: 1148197
 MicroEdition-Profile: MIDP-2.0
 MicroEdition-Configuration: CLDC-1.1

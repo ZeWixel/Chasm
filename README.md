@@ -42,7 +42,7 @@ A Java ME (`CLDC 1.1` / `MIDP 2.0`) port of the 1997 DOS 3D first-person shooter
 | 4 / 6 | Turn left / right |
 | 1 / 3 | Strafe left / right |
 | 5 | Fire |
-| 7 | Open the nearest door or switch (fallback if the automatic opening fails; locks still apply) |
+| 7 | Open the nearest door or switch within one cell (fallback if the automatic opening fails; locks still apply) |
 | 9 | Level map (automap) toggle; the player is a triangle pointing where you face |
 | * / # | Previous / next weapon |
 | 0 | Jump |
@@ -97,7 +97,7 @@ There is no use key. Doors, gates, switches and the exit work on touch, as in th
 - **Triggers** (from `#links` and `LinkSwitchAt`): `link` fires when the player comes within one cell (3x3 block), `floor` when the player steps on the cell, `onofflink` the same as `link` but a second touch closes the proc, and `return` resets the proc to its start state.
 - **Floor links** fire when the player's circle touches the trigger cell (radius 24 units), as in the original, so a door whose floor link sits in its own cell opens when the player bumps it from outside.
 - **Destroy links** (`destroy X Y N`) are fired by shooting the gate lock (`LOCK01.3O`, prop model 38) on cell X,Y: hitscan and projectiles both damage it (60 HP). When it breaks, proc N unlocks and opens, ignoring keys, as in `ProcedureProcessDestroy`.
-- **Manual use (key 7):** opens the nearest door or switch within two cells, with the usual lock checks. Far from any door it shows `NO DOOR NEAR`. This is a fallback for the automatic opening, and it goes against the no-use-key rule above only for this key.
+- **Manual use (key 7):** opens the nearest door or switch within one cell, with the usual lock checks. Far from any door it shows `NO DOOR NEAR`. This is a fallback for the automatic opening, and it goes against the no-use-key rule above only for this key.
 - **Activation** follows the original engine (`Chasm-Reverse`, `ProcedureProcess*`). A proc runs only if it is unlocked, or if the key it needs (green, red or blue) is held. `Lock` is removed by an `unlock N` action from another proc. A refused touch is retried every tick while the player stays in range, so a key picked up nearby opens the door.
 - **Doors** are sectors whose ceiling is level with the floor when closed (blocks the player) and rises to the open height. `StartDelay` and `BackWait` are in seconds (converted at 28 ticks per second). `BackWait 0` means the door never returns. A door never closes on the player: it waits until the player leaves its cells.
 - **Gates** (`up X Y H`) raise a transparent wall by H, so the cell opens to floor + H.

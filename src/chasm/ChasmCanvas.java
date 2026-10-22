@@ -368,9 +368,10 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         String shadeStr = PolyRenderer3D.SHADE_NAMES[world.polyRenderer.shadingMode];
         String soundStr = (sound != null && sound.musicEnabled) ? "ON" : "OFF";
 
+        Font smallFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN, Font.SIZE_SMALL);
         String[] items = {
             "NEW / START MISSION",
-            "MAP: " + GameWorld.LEVEL_NAMES[selectedStartLevel],
+            levelMenuText(smallFont, selectedStartLevel, scrW - 36),
             "3D SHADING: " + shadeStr,
             "AUDIO (MIDI+WAV): " + soundStr,
             "CONTROLS & HELP",
@@ -390,7 +391,6 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.setColor(0x52401C);
         g.drawRect(boxX + 2, boxY + 2, boxW - 5, boxH - 5);
 
-        Font smallFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
         g.setFont(smallFont);
         int listY = boxY + 7;
         for (int i = 0; i < items.length; i++) {
@@ -428,9 +428,12 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         Font bold = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_MEDIUM);
         Font small = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN, Font.SIZE_SMALL);
 
-        g.setFont(bold);
+        String title = GameWorld.levelLabel(world.currentLevel, false);
+        // The numbered title falls back to the small font when the medium one does not fit.
+        Font titleFont = bold.stringWidth(title) <= scrW - 12 ? bold : small;
+        g.setFont(titleFont);
         g.setColor(0xFFCC44);
-        g.drawString(GameWorld.LEVEL_NAMES[world.currentLevel], scrW >> 1, 18, Graphics.TOP | Graphics.HCENTER);
+        g.drawString(title, scrW >> 1, 18, Graphics.TOP | Graphics.HCENTER);
 
         g.setFont(small);
         g.setColor(0xD0D8C8);
@@ -837,6 +840,16 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     }
 
     // ==================== Keypad Input Handling ====================
+
+    /**
+     * Menu line for the map choice: "MAP: 4 SHMUHER (FIRST BUILD)" if it fits in maxW pixels,
+     * otherwise the short name.
+     */
+    private static String levelMenuText(Font f, int levelIndex, int maxW) {
+        String full = "MAP: " + GameWorld.levelLabel(levelIndex, false);
+        if (f.stringWidth(full) <= maxW) return full;
+        return "MAP: " + GameWorld.levelLabel(levelIndex, true);
+    }
 
     protected void keyPressed(int keyCode) {
         int action = 0;

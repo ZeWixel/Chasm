@@ -1385,17 +1385,10 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 # (add_engineered_steps_and_walls). Level 4 was drawn by hand (build_level4_sanctum). None of
 # this is not game data.
 LEGACY_DIR = os.path.join(ROOT_DIR, "tools", "legacy")
-# (level index in the game, legacy map number, source MAP for textures, or None for a fixed list)
+# (level index in the game, legacy map number in tools/legacy, source MAP for the textures)
+# Level 4 is the first build's "Pyramid of Shmuher" (grid map 3, textures of MAP.06).
 LEGACY_LEVELS = [
-    (4, 4, None),   # level 4: Time Chasm Sanctum (map4.bin), not game data
-]
-
-# Wall texture names of the first build's level 4 (build_level4_sanctum in b8d28e9).
-SANCTUM_WALL_NAMES = [
-    "ALIENB01", "ALIENG01", "ALIENG02", "BLWALL01", "BLWALL02", "BLWALL03",
-    "BRED02", "BRED03", "BRED04", "DMET01", "DMET02", "F_BORD01",
-    "GATE01", "GATE02", "GBLOCK1", "GBLOCK2", "P_BAM64", "P_FR56",
-    "P_STFR", "BRICKW1", "BRICKW2", "FENCE01", "BOX01", "BOX02",
+    (4, 3, 6),
 ]
 
 
@@ -1692,15 +1685,9 @@ def compile_legacy_level(level_idx, legacy_no, wall_names, floor_fids, floors_bl
 
 def build_legacy_levels():
     for level_idx, legacy_no, source_map in LEGACY_LEVELS:
-        if source_map is None:
-            wall_names = SANCTUM_WALL_NAMES
-            floor_fids = list(range(12))
-            floors_blob = csm.read("FLOORS.06")
-            label = "first build level 4, fixed texture list"
-        else:
-            wall_names, floor_fids = legacy_texture_lists(source_map)
-            floors_blob = csm.read(f"FLOORS.{source_map:02d}")
-            label = f"first build level {legacy_no}, textures of MAP.{source_map:02d}"
+        wall_names, floor_fids = legacy_texture_lists(source_map)
+        floors_blob = csm.read(f"FLOORS.{source_map:02d}")
+        label = f"first build level {legacy_no}, textures of MAP.{source_map:02d}"
         compile_legacy_level(level_idx, legacy_no, wall_names, floor_fids, floors_blob, label)
 
 
