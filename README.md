@@ -127,15 +127,15 @@ The `CSM.BIN` used by this build has four maps: `MAP.01`, `MAP.05`, `MAP.06` and
 | 2 | MAP.05 | Around Pyramids | red (`KEY.3O`) |
 | 3 | MAP.06 | Pyramid of Shmuher | red (`KEY.3O`) |
 
-| 4 | first build `map4` | Time Chasm Sanctum (hand-made, **not game data**) | none |
+| 4 | first build `map3` | Pyramid of Shmuher (first build layout, hand-made steps and walls, **not game data**) | none |
 
-Level 4 is the hand-made "Time Chasm Sanctum" of the first build (`b8d28e9`, PR #1), restored from `tools/legacy/map4.bin` and compiled by `build_legacy_levels`. The first build's levels 1–3 (grid copies of MAP.01/05/06) and its level 4 copy of MAP.01 stay removed. The grid-to-C3B converter (`parse_legacy_map`, `compile_legacy_level`) is in `tools/build_assets.py`.
+Level 4 is the first build's "Pyramid of Shmuher" (`b8d28e9`, PR #1; grid map 3), restored from `tools/legacy/map3.bin` and compiled by `build_legacy_levels` with the textures of `MAP.06`. It is the level that was 6th in the first build. The first build's other levels (grid copies of MAP.01/05/06 and the Time Chasm Sanctum, `map4`) stay removed. The grid-to-C3B converter (`parse_legacy_map`, `compile_legacy_level`) is in `tools/build_assets.py`.
 
 Keys are pickups (models 27 red, 28 green, 29 blue). The converter places them first and never cuts them from the item list, so a level keeps its keys even when it has more than 48 pickups.
 
 ## Known limitations
 
-- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels from the data, plus level 4 (the Sanctum, not game data). Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
+- **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels from the data, plus level 4 (the first build's Pyramid of Shmuher, not game data). Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
 
 - Only links (proximity, floor, toggle, return, destroy on the gate lock), `unlock` chains, doors, gates (`up`) and moving platforms are executed from `PROCESS.XX`. `shoot` links (walls), rotating parts (see Doors), lights and animations are not.
 - Door textures are not verified. In a render of L1 `MAP.01` proc 8 (helipad door) the closed door shows as a black column where the door is, and the open door shows the stone texture. The cause is not fixed yet. Door wall textures come from the nearest wall object (`cell_wall_tex`, 3×3 stamp), so a door can take a neighbour's texture.
