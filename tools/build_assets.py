@@ -833,7 +833,12 @@ def load_proc_defs(map_num):
     for pid, p in parsed["procs"].items():
         h = p["header"]
         cells, ups, unlocks, moves = [], {}, [], {}
+        rotates = []
         for name, args in p["actions"]:
+            if name == "rotate" and len(args) >= 5 and all(isinstance(a, int) for a in args[:5]):
+                # rotate X Y cx cy angle: the wall of cell (X, Y) turns by angle degrees about
+                # (cx, cy), 1/256 cell units, over the proc's stage (Chasm-Reverse Action::Rotate).
+                rotates.append((args[0], args[1], args[2], args[3], args[4]))
             if name in ("move", "xmove", "ymove", "up") and len(args) >= 2 \
                     and isinstance(args[0], int) and isinstance(args[1], int):
                 cell = (args[0], args[1])
@@ -855,6 +860,7 @@ def load_proc_defs(map_num):
         locked = bool(h.get("lock")) or key != 0
         procs[pid] = dict(
             cells=cells,
+            rotates=rotates,
             moves=moves,
             ups=ups,
             triggers=triggers,
@@ -1351,6 +1357,43 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
             else:
                 open_h = sector_open_h[sid]
             proc_buf.extend(struct.pack(">BBHH", cx, cy, sid, open_h))
+    # Panels: the thin walls (tid < 128) of a door cell and of a rotating proc's cells. They are
+    # not part of the baked geometry (only cell edges are); the game builds them at load time as
+    # solid textured walls. kind 0 = door panel (solid while its proc is closed), kind 1 = rotating
+    # wall (solid always; its endpoints turn with the proc stage). Coordinates: (cell - 32) * 256.
+    panels = []
+    for pid in sorted(procs):
+        p = procs[pid]
+        if pid in mover_pids:
+            continue
+        for (cx_, cy_) in p['cells']:
+            if door_of_cell.get((cx_, cy_)) != pid:
+                continue
+            w = mdata[walls_off_of(cx_, cy_):walls_off_of(cx_, cy_) + 11]
+            tid, _sz, _unk, c00, c01, c10, c11 = struct.unpack("<3B4H", w)
+            if 0 < tid < 128:
+                panels.append((0, pid, wall_slot.get(tid, default_wall), (c00, c01), (c10, c11), None, 0))
+        for (rx, ry, pcx, pcy, ang) in p['rotates']:
+            if not (0 <= rx < 64 and 0 <= ry < 64):
+                continue
+            w = mdata[walls_off_of(rx, ry):walls_off_of(rx, ry) + 11]
+            tid, _sz, _unk, c00, c01, c10, c11 = struct.unpack("<3B4H", w)
+            if 0 < tid < 128:
+                panels.append((1, pid, wall_slot.get(tid, default_wall), (c00, c01), (c10, c11),
+                               (pcx, pcy), ang))
+    print(f"[OK] MAP.{map_num:02d}: {len(panels)} panels "
+          f"({sum(1 for q in panels if q[0] == 1)} rotating)")
+    # Panel records: >H count, then >BBB kind, proc id, slot and >hhhhhhh x0, y0, x1, y1
+    # (cell - 32) * 256, pivot x, pivot y (kind 1), angle in degrees (kind 1).
+    def q256(v):
+        return int(round((v / 256.0 - 32.0) * 256.0))
+    panel_buf = bytearray(struct.pack(">H", len(panels)))
+    for kind, pid, slot, a, b, piv, ang in panels:
+        cx_p, cy_p = piv if piv else (0, 0)
+        panel_buf.extend(struct.pack(">BBBhhhhhhh", kind, pid & 0xFF, slot & 0xFF,
+                                     q256(a[0]), q256(a[1]), q256(b[0]), q256(b[1]),
+                                     q256(cx_p), q256(cy_p), int(ang)))
+
     used_msgs = sorted({m for _, p, _ in door_records for m in (p['onmsg'], p['lockmsg']) if m})
     proc_buf.extend(struct.pack(">B", len(used_msgs)))
     for m in used_msgs:
@@ -1361,6 +1404,8 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     proc_buf.extend(struct.pack(">B", len(movers)))
     for pid, mid, bx, bz, ddx, ddz, hx, hz, ang in movers:
         proc_buf.extend(struct.pack(">BBhhhhhhB", pid & 0xFF, mid, bx, bz, ddx, ddz, hx, hz, ang))
+    # Panels (see above), after the movers
+    proc_buf.extend(panel_buf)
     with open(os.path.join(LEVELS_DIR, f"procs{level_idx}.bin"), "wb") as f:
         f.write(proc_buf)
 

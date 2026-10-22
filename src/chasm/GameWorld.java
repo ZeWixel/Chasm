@@ -1,7 +1,9 @@
 package chasm;
 
 import java.io.DataInputStream;
+import java.io.EOFException;
 import java.io.InputStream;
+import java.util.Vector;
 
 /**
  * Chasm: The Rift GameWorld built on CovertOps3D-RE's C3D2/C3B BSP-Portal Engine
@@ -499,6 +501,7 @@ public final class GameWorld {
         movCount = 0;
         for (int i = 0; i < procMsg.length; i++) procMsg[i] = null;
         for (int i = 0; i < MAX_PROCS; i++) procMoves[i] = false;
+        panelCount = 0;
         try {
             InputStream is = GameWorld.class.getResourceAsStream(path);
             if (is == null) return;
@@ -575,6 +578,26 @@ public final class GameWorld {
                 movHX[k] = hx;
                 movHZ[k] = hz;
                 movAng[k] = ang;
+            }
+            // Panels (door panels and rotating walls). Older sidecars end after the movers.
+            int pc = 0;
+            try {
+                pc = dis.readUnsignedShort();
+            } catch (EOFException e) {
+                pc = 0;
+            }
+            for (int q = 0; q < pc; q++) {
+                int kind = dis.readUnsignedByte();
+                int pid = dis.readUnsignedByte();
+                int slot = dis.readUnsignedByte();
+                int[] raw = new int[7];
+                for (int j = 0; j < 7; j++) raw[j] = dis.readShort();
+                if (panelCount >= MAX_PANELS) continue;
+                int k = panelCount++;
+                panelKind[k] = kind;
+                panelPid[k] = pid;
+                panelSlot[k] = slot;
+                for (int j = 0; j < 7; j++) panelRaw[k * 7 + j] = raw[j];
             }
             dis.close();
         } catch (Exception e) {
@@ -706,7 +729,7 @@ public final class GameWorld {
             if (st == DSTATE_OPEN && procBackWait[p] > 0) procTimer[p] = procBackWait[p];
             return;
         }
-        if (procCell[p].length > 0 || procMoves[p]) {
+        if (procCell[p].length > 0 || procMoves[p] || procHasRotor[p]) {
             procState[p] = procDelay[p] > 0 ? DSTATE_DELAY : DSTATE_OPENING;
             procTimer[p] = procDelay[p];
         }
@@ -839,6 +862,7 @@ public final class GameWorld {
         }
         for (int p = 0; p < procCount; p++) advanceProc(p, cx, cz);
         updateMovers();
+        updatePanels();
     }
 
     /**
@@ -920,6 +944,231 @@ public final class GameWorld {
     }
 
     /** The level ends when every enemy is down and the player reaches the exit point. */
+    // ==================== Panels: door panels and rotating walls ====================
+    // The thin walls inside a door's cells and inside a rotating proc's cells are not part of the
+    // baked geometry (only cell edges are). At load each becomes a solid textured wall in the sector
+    // on each side of it (both faces), with its own vertices, so it blocks, shows its texture and
+    // is cut by the portal clipping like any other wall. A door panel is solid only while its proc
+    // is closed (stage 0); the portal walls between the door and its neighbours are hidden then, so
+    // the panel is the door's face. A rotating panel turns about its pivot with the proc stage.
+    private static final int MAX_PANELS = 160;
+    private static final int PANEL_KIND_DOOR = 0;
+    private static final int PANEL_KIND_ROTATE = 1;
+    /** Sample distance past each side of a panel, to find the sector it stands in (0.75 cell). */
+    private static final int PANEL_SIDE_UNITS = 72;
+    /** World units per panel coordinate step: the sidecar stores (cell - 32) * 256. */
+    private static final int PANEL_RAW_UNITS = CELL_UNITS << 16;
+
+    private int panelCount = 0;
+    private final int[] panelKind = new int[MAX_PANELS];
+    private final int[] panelPid = new int[MAX_PANELS];
+    private final int[] panelSlot = new int[MAX_PANELS];
+    /** Per panel: x0, y0, x1, y1, pivot x, pivot y, angle in degrees (raw sidecar values). */
+    private final int[] panelRaw = new int[MAX_PANELS * 7];
+    private final int[] panelProc = new int[MAX_PANELS];     // index into procs, -1 none
+    private final int[] panelV0 = new int[MAX_PANELS];       // vertex indices
+    private final int[] panelV1 = new int[MAX_PANELS];
+    private final int[] panelLastStage = new int[MAX_PANELS];
+    private final boolean[] panelClosed = new boolean[MAX_PANELS];
+    private final WallDefinition[] panelCollide = new WallDefinition[MAX_PANELS];
+    /** Every WallDefinition of a panel: its collision definition and one per side it is seen from. */
+    private final Vector[] panelDefs = new Vector[MAX_PANELS];
+    /** Per proc: the portal walls between its door cells and the neighbours (hidden while closed). */
+    private final Vector[] procHideWalls = new Vector[MAX_PROCS];
+    private final boolean[] procDoorClosed = new boolean[MAX_PROCS];
+    /** True for a proc that turns a rotating panel: it opens on a touch like a door. */
+    private final boolean[] procHasRotor = new boolean[MAX_PROCS];
+
+    /** Raw sidecar value -> 16.16 world coordinate. */
+    private static int panelToFixed(int raw) {
+        return raw * (PANEL_RAW_UNITS >> 8);
+    }
+
+    private void attachPanels() {
+        for (int p = 0; p < MAX_PROCS; p++) procHasRotor[p] = false;
+        if (panelCount == 0 || vertices == null || wallDefinitions == null || sectors == null) return;
+        int oldV = vertices.length;
+        int oldW = wallDefinitions.length;
+        Point2D[] nv = new Point2D[oldV + 2 * panelCount];
+        System.arraycopy(vertices, 0, nv, 0, oldV);
+        for (int i = 0; i < panelCount; i++) {
+            panelV0[i] = oldV + 2 * i;
+            panelV1[i] = oldV + 2 * i + 1;
+            nv[panelV0[i]] = new Point2D(0, 0);
+            nv[panelV1[i]] = new Point2D(0, 0);
+        }
+        setVertices(nv);
+
+        WallDefinition[] nw = new WallDefinition[oldW + panelCount];
+        System.arraycopy(wallDefinitions, 0, nw, 0, oldW);
+        for (int i = 0; i < panelCount; i++) {
+            int pid = panelPid[i];
+            panelProc[i] = procIndex(pid);
+            panelLastStage[i] = -1;
+            panelClosed[i] = false;
+            placePanel(i, 0);
+
+            WallDefinition coll = new WallDefinition((short) panelV0[i], (short) panelV1[i],
+                    (short) 0, (short) -1, (byte) 0, (byte) 0, (byte) 0);
+            Vector defs = new Vector();
+            defs.addElement(coll);
+            panelCollide[i] = coll;
+            panelDefs[i] = defs;
+            nw[oldW + i] = coll;
+
+            // Mid point and unit normal of the panel, in 16.16 world units.
+            Point2D a = vertices[panelV0[i]];
+            Point2D b = vertices[panelV1[i]];
+            long mx = ((long) a.x + b.x) >> 1;
+            long mz = ((long) a.y + b.y) >> 1;
+            int dx = b.x - a.x;
+            int dz = b.y - a.y;
+            int len = MathUtils.preciseHypot(dx, dz);
+            if (len == 0) continue;
+            int nx = MathUtils.fixedPointDivide(-dz, len);
+            int nz = MathUtils.fixedPointDivide(dx, len);
+            Sector[] leaves = new Sector[2];
+            int leafCount = 0;
+            for (int side = -1; side <= 1; side += 2) {
+                int sx = (int) (mx + side * (long) ((long) nx * PANEL_SIDE_UNITS));
+                int sz = (int) (mz + side * (long) ((long) nz * PANEL_SIDE_UNITS));
+                Sector leaf = getSectorAtPoint(sx, sz);
+                if (leaf == null) continue;
+                SectorData sd = leaf.getSectorData();
+                if (sd == null || sd.ceilingHeight - sd.floorHeight <= 0) continue;
+                boolean seen = false;
+                for (int k = 0; k < leafCount; k++) seen |= leaves[k] == leaf;
+                if (seen) continue;
+                leaves[leafCount++] = leaf;
+
+                WallSurface surf = new WallSurface((byte) panelSlot[i], (byte) panelSlot[i], (byte) panelSlot[i],
+                        0, (short) 0, (short) 0);
+                surf.linkedSector = sd;
+                WallDefinition rd = new WallDefinition((short) panelV0[i], (short) panelV1[i],
+                        (short) 0, (short) -1, (byte) 0, (byte) 0, (byte) 0);
+                rd.frontSurface = surf;
+                rd.backSurface = null;
+                defs.addElement(rd);
+                if (coll.frontSurface == null) coll.frontSurface = surf;
+                WallSegment sa = new WallSegment((short) panelV0[i], (short) panelV1[i], (short) 0, true, (short) 0);
+                WallSegment sb = new WallSegment((short) panelV1[i], (short) panelV0[i], (short) 0, true, (short) 0);
+                sa.wallDefinition = rd;
+                sb.wallDefinition = rd;
+                WallSegment[] old = leaf.walls;
+                WallSegment[] grown = new WallSegment[old.length + 2];
+                System.arraycopy(old, 0, grown, 0, old.length);
+                grown[old.length] = sa;
+                grown[old.length + 1] = sb;
+                leaf.walls = grown;
+            }
+        }
+        wallDefinitions = nw;
+
+        for (int i = 0; i < panelCount; i++) {
+            if (panelKind[i] == PANEL_KIND_ROTATE && panelProc[i] >= 0) procHasRotor[panelProc[i]] = true;
+        }
+
+        // Door faces: the walls on the door's sides (portals and solid edges) are hidden while the
+        // door is closed; they still block, only the panel is drawn.
+        for (int p = 0; p < procCount; p++) {
+            procHideWalls[p] = null;
+            procDoorClosed[p] = true;
+            boolean hasDoorPanel = false;
+            for (int i = 0; i < panelCount; i++) {
+                if (panelKind[i] == PANEL_KIND_DOOR && panelProc[i] == p) hasDoorPanel = true;
+            }
+            if (!hasDoorPanel) continue;
+            Vector hide = new Vector();
+            int[] cells = procCell[p];
+            for (int w = 0; w < oldW; w++) {
+                WallDefinition wd = wallDefinitions[w];
+                for (int c = 0; c < cells.length; c += 4) {
+                    int sid = cells[c + 2];
+                    if (sid < 0 || sid >= sectors.length) continue;
+                    SectorData door = sectors[sid];
+                    if (wd.frontSurface.linkedSector == door
+                            || (wd.backSurface != null && wd.backSurface.linkedSector == door)) {
+                        hide.addElement(wd);
+                        break;
+                    }
+                }
+            }
+            procHideWalls[p] = hide;
+        }
+        updatePanels();
+    }
+
+    /**
+     * Sets the vertices of panel i for a proc stage (0..STAGE_ONE) and the normal of its collision
+     * definition. A door panel keeps its stage-0 position.
+     */
+    private void placePanel(int i, int stage) {
+        int r = i * 7;
+        int x0 = panelToFixed(panelRaw[r]);
+        int z0 = panelToFixed(panelRaw[r + 1]);
+        int x1 = panelToFixed(panelRaw[r + 2]);
+        int z1 = panelToFixed(panelRaw[r + 3]);
+        if (panelKind[i] == PANEL_KIND_ROTATE && stage != 0) {
+            int cx = panelToFixed(panelRaw[r + 4]);
+            int cz = panelToFixed(panelRaw[r + 5]);
+            int angle = (int) ((long) panelRaw[r + 6] * stage * MathUtils.FULL_CIRCLE / (360L * STAGE_ONE));
+            int sin = MathUtils.fastSin(angle);
+            int cos = MathUtils.fastCos(angle);
+            int ox0 = x0 - cx, oz0 = z0 - cz, ox1 = x1 - cx, oz1 = z1 - cz;
+            x0 = cx + (int) (((long) cos * ox0 - (long) sin * oz0) >> 16);
+            z0 = cz + (int) (((long) sin * ox0 + (long) cos * oz0) >> 16);
+            x1 = cx + (int) (((long) cos * ox1 - (long) sin * oz1) >> 16);
+            z1 = cz + (int) (((long) sin * ox1 + (long) cos * oz1) >> 16);
+        }
+        Point2D a = vertices[panelV0[i]];
+        Point2D b = vertices[panelV1[i]];
+        a.x = x0;
+        a.y = z0;
+        b.x = x1;
+        b.y = z1;
+        WallDefinition coll = panelCollide[i];
+        if (coll == null) return;
+        // Same normal as WallDefinition.initializeWall, for the collision code.
+        int dy = a.y - b.y;
+        int dx = b.x - a.x;
+        int length = MathUtils.preciseHypot(dx, dy);
+        if (length == 0) return;
+        coll.normalVector.x = MathUtils.fixedPointDivide(dy, length);
+        coll.normalVector.y = MathUtils.fixedPointDivide(dx, length);
+    }
+
+    /** Runs once per tick: rotating panels follow their proc, door panels follow open/closed. */
+    private void updatePanels() {
+        for (int i = 0; i < panelCount; i++) {
+            int p = panelProc[i];
+            int stage = p >= 0 ? procStage[p] : 0;
+            if (panelKind[i] == PANEL_KIND_ROTATE) {
+                if (stage != panelLastStage[i]) {
+                    panelLastStage[i] = stage;
+                    placePanel(i, stage);
+                }
+            } else {
+                boolean closed = stage == 0;
+                if (closed != panelClosed[i]) {
+                    panelClosed[i] = closed;
+                    Vector defs = panelDefs[i];
+                    for (int d = 0; d < defs.size(); d++) {
+                        ((WallDefinition) defs.elementAt(d)).disabled = !closed;
+                    }
+                }
+            }
+        }
+        for (int p = 0; p < procCount; p++) {
+            Vector hide = procHideWalls[p];
+            if (hide == null) continue;
+            boolean closed = procStage[p] == 0;
+            procDoorClosed[p] = closed;
+            for (int h = 0; h < hide.size(); h++) {
+                ((WallDefinition) hide.elementAt(h)).hidden = closed;
+            }
+        }
+    }
+
     private void updateLevelExit() {
         int alive = 0;
         for (int i = 0; i < monCount; i++) {
@@ -973,6 +1222,7 @@ public final class GameWorld {
         // Doors, switches and keys are per level; the player starts each level without keys
         loadProcsSidecar("/levels/procs" + (levelIndex + 1) + ".bin");
         attachMovers();
+        attachPanels();
         for (int m = 0; m < monCount; m++) {
             pushMonsterOutOfProps(m);   // a platform may stand where a monster was placed
         }
@@ -1226,6 +1476,7 @@ public final class GameWorld {
         if (wallDefinitions != null) {
             for (int i = 0; i < wallDefinitions.length; i++) {
                 WallDefinition wall = wallDefinitions[i];
+                if (wall.disabled) continue;
                 if (wall.isCollidable() || CollisionSystem.isWallPassableForSector(curSector, wall)) {
                     CollisionSystem.resolveWallCollision(collisionTestPoint, wall, vertices);
                 }
@@ -1808,7 +2059,7 @@ public final class GameWorld {
         if (wallDefinitions == null) return true;
         for (int i = 0; i < wallDefinitions.length; i++) {
             WallDefinition wall = wallDefinitions[i];
-            if (!CollisionSystem.isWallSolid(wall)) continue;
+            if (wall.disabled || !CollisionSystem.isWallSolid(wall)) continue;
             Point2D vStart = vertices[wall.startVertexId & 0xFFFF];
             Point2D vEnd = vertices[wall.endVertexId & 0xFFFF];
             if (CollisionSystem.doLineSegmentsIntersect(x1, z1, x2, z2, vStart.x, vStart.y, vEnd.x, vEnd.y)) {

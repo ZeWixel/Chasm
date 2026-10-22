@@ -106,7 +106,9 @@ There is no use key. Doors, gates, switches and the exit work on touch, as in th
 
 - **Moving platforms** (`move`, `xmove`, `ymove` on a cell that holds a 3O model, for example `MAP.06` procs 2, 3 and 16). Their model is not a static prop: it is a prop box that the proc moves (see below).
 
-Not implemented: `shoot` links, `rotate`, `light`, `playani`, `waitout`, `death`, and vertical lifts. Four rotating doors/walls therefore never move: `MAP.01` proc 3 (house with window) and proc 18 (restricted area #1), and `MAP.06` proc 18 and proc 26. Rotating walls need a sector-geometry change, which the C3B build does not provide yet. In the `CSM.BIN` data, the `up` action only raises fence and frame walls; no lift platform uses it. These are parsed and ignored.
+Not implemented: `shoot` links, `light`, `playani`, `waitout`, `death`, and vertical lifts. In the `CSM.BIN` data, the `up` action only raises fence and frame walls; no lift platform uses it. These are parsed and ignored.
+
+- **Panels (door panels and rotating walls):** the thin walls inside a door's cells, and inside a rotating proc's cells, are not in the baked C3B geometry (only cell edges are). `build_assets.py` writes them to the end of `procs{N}.bin` as panel records (kind, proc, texture slot, endpoints, pivot, angle). At load each becomes a solid textured wall, with its own vertices, in the sector on each side of it. A door panel is solid only while its proc is closed; while closed, the door's side walls are hidden (they still block). A rotating panel turns about its pivot by `angle × stage / 256` (`rotate X Y cx cy angle`, Chasm-Reverse `Action::Rotate`; the sign was checked against the solid cells the panel sweeps through). Rotating procs open on a touch like doors and stay open (`BackWait 0`). Panel placement is approximate: a panel is drawn in the sector next to it, so a rotating panel that swings far can be cut at a sector boundary.
 
 ### Moving platforms
 
@@ -138,7 +140,7 @@ Keys are pickups (models 27 red, 28 green, 29 blue). The converter places them f
 - **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels from the data, plus level 4 (the first build's Pyramid of Shmuher, not game data). Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
 
 - Only links (proximity, floor, toggle, return, destroy on the gate lock), `unlock` chains, doors, gates (`up`) and moving platforms are executed from `PROCESS.XX`. `shoot` links (walls), rotating parts (see Doors), lights and animations are not.
-- Door textures are not verified. In a render of L1 `MAP.01` proc 8 (helipad door) the closed door shows as a black column where the door is, and the open door shows the stone texture. The cause is not fixed yet. Door wall textures come from the nearest wall object (`cell_wall_tex`, 3×3 stamp), so a door can take a neighbour's texture.
+- Door textures: a closed door now shows its own panel texture (the thin wall inside the door cell, see Doors), instead of the black column of the zero-height sector. Checked only with the desktop render harness, not on a phone. Other thin walls in walkable cells (not door or rotating ones) are still not geometry; the door panels were the only ones added.
 - The automap (key 9) has not been checked on a device.
 - The full-area geometry has not been measured on a device. Frame rate and memory with 150–230 sectors are unknown.
 - Some portal walls still show angle-dependent distortion; the root cause has not been isolated.

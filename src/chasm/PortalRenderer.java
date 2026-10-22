@@ -534,6 +534,7 @@ public class PortalRenderer {
                                           int cameraX, int cameraY, int cameraZ, int viewAngle) {
 
         WallDefinition wallDef = wallSegment.wallDefinition;
+        if (wallDef.disabled || wallDef.hidden) return;
         WallSurface frontSurface = wallDef.frontSurface;
         WallSurface backSurface = wallDef.backSurface;
 

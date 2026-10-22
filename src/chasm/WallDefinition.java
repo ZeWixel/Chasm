@@ -16,6 +16,10 @@ public final class WallDefinition {
     private byte wallFlags;
     private byte wallType;
     private byte specialType;
+    /** Panel walls only: false while the panel is absent (an open door, a turned-away wall). */
+    public boolean disabled;
+    /** Render only: a door's portal walls are not drawn while the door is closed (its panel is the face). */
+    public boolean hidden;
 
     // Bit masks for wallFlags
     private static final byte FLAG_SOLID       = 1;    // 0x01

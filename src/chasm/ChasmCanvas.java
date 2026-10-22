@@ -612,6 +612,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         if (world.wallDefinitions != null && world.vertices != null) {
             for (int i = 0; i < world.wallDefinitions.length; i++) {
                 WallDefinition w = world.wallDefinitions[i];
+                if (w.disabled) continue;
                 Point2D v0 = world.vertices[w.startVertexId & 0xFFFF];
                 Point2D v1 = world.vertices[w.endVertexId & 0xFFFF];
                 int x0 = cx + (((v0.x >> 16) - px) >> 3);
