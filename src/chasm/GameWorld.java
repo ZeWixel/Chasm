@@ -954,8 +954,8 @@ public final class GameWorld {
     private static final int MAX_PANELS = 400;
     private static final int PANEL_KIND_DOOR = 0;
     private static final int PANEL_KIND_ROTATE = 1;
-    /** Sample distance past each side of a panel, to find the sector it stands in (0.75 cell). */
-    private static final int PANEL_SIDE_UNITS = 72;
+    /** Sample distance past each side of a panel, to find the sector it stands in (0.25 cell). */
+    private static final int PANEL_SIDE_UNITS = 20;
     /** World units per panel coordinate step: the sidecar stores (cell - 32) * 256. */
     private static final int PANEL_RAW_UNITS = CELL_UNITS << 16;
 

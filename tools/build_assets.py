@@ -1314,6 +1314,14 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
                 continue
             if not all(c in visited for c in sides):
                 continue
+            # Drop short thin walls (< 1 cell ≈ 96 world units) – they produce stretched
+            # textures and gaps that read as distorted geometry on pause DEV overlay.
+            if abs(c10 - c00) + abs(c11 - c01) < 256:
+                # Manhattan check is exact for axis-aligned; for diagonal use hypot and
+                # keep only if geometric length ≥ 1 cell.  Keep longer diagonals even if
+                # their Manhattan sum is small – e.g. 180+180 still <256 but hypot 254.
+                if (c00 - c10) * (c00 - c10) + (c01 - c11) * (c01 - c11) < 256 * 256:
+                    continue
             static_panels.append((2, 255, wall_slot.get(tid, default_wall), (c00, c01), (c10, c11), None, 0))
             static_segments.append(((c00, c01), (c10, c11)))
     # Cells the player can reach from the spawn with these walls in place (sub-cell flood fill).
