@@ -2,6 +2,7 @@ package chasm;
 
 import java.io.DataInputStream;
 import java.io.InputStream;
+import javax.microedition.lcdui.Image;
 
 /**
  * UI images restored from the first build's /ui.bin (LOADING.CEL logo, M_TILE1.CEL menu tile,
@@ -27,6 +28,16 @@ public final class UiAssets {
         loaded = true;
         int[] pal = loadPalette();
         loadIcons(pal);
+        // Попытка загрузить открытые PNG из res/open/graphics/ui/ (редактируемые)
+        try {
+            int[] oLogo = loadPngIconWithSize("/open/graphics/ui/logo_128x76.png");
+            int[] oTile = loadPngIconWithSize("/open/graphics/ui/tile_64x64.png");
+            int[] oHud = loadPngIconWithSize("/open/graphics/ui/hud_160x32.png");
+            if (oLogo != null) { logo = oLogo; logoW = 128; logoH = 76; }
+            if (oTile != null) { tile = oTile; tileW = 64; tileH = 64; }
+            if (oHud != null) { hud = oHud; hudW = 160; hudH = 32; }
+            if (oLogo != null || oTile != null || oHud != null) return;
+        } catch (Throwable t) {}
         InputStream is = null;
         try {
             is = UiAssets.class.getResourceAsStream("/ui.bin");
@@ -52,7 +63,34 @@ public final class UiAssets {
         }
     }
 
+    private static int[] loadPngIconWithSize(String path) {
+        try {
+            InputStream is = UiAssets.class.getResourceAsStream(path);
+            if (is == null) return null;
+            Image img = Image.createImage(is);
+            int w = img.getWidth();
+            int h = img.getHeight();
+            int[] argb = new int[w * h];
+            img.getRGB(argb, 0, w, 0, 0, w, h);
+            return argb;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static void loadIcons(int[] pal) {
+        // Сначала пробуем открытые PNG из res/open/graphics/hud/ (редактируемые)
+        try {
+            int[] hp = loadPngIcon("/open/graphics/hud/hp.png");
+            int[] ar = loadPngIcon("/open/graphics/hud/armor.png");
+            int[] am = loadPngIcon("/open/graphics/hud/ammo.png");
+            if (hp != null && ar != null && am != null) {
+                iconHp = hp;
+                iconAr = ar;
+                iconAmmo = am;
+                return;
+            }
+        } catch (Throwable t) {}
         InputStream is = null;
         try {
             is = UiAssets.class.getResourceAsStream("/hud_icons.bin");
@@ -75,6 +113,21 @@ public final class UiAssets {
             if (is != null) {
                 try { is.close(); } catch (Exception ex) {}
             }
+        }
+    }
+
+    private static int[] loadPngIcon(String path) {
+        try {
+            InputStream is = UiAssets.class.getResourceAsStream(path);
+            if (is == null) return null;
+            Image img = Image.createImage(is);
+            int w = img.getWidth();
+            int h = img.getHeight();
+            int[] argb = new int[w * h];
+            img.getRGB(argb, 0, w, 0, 0, w, h);
+            return argb;
+        } catch (Exception e) {
+            return null;
         }
     }
 

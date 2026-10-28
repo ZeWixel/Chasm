@@ -82,6 +82,9 @@ public class ChasmMIDlet extends MIDlet {
                     canvas.getRenderer3D().shadingMode = data[1] & 3;
                     sound.musicEnabled = (data[2] != 0);
                     sound.sfxEnabled = (data[3] != 0);
+                    if (data.length >= 5) {
+                        canvas.getWorld().enemyBehavior = data[4] & 1;
+                    }
                 }
             }
         } catch (Exception e) {
@@ -96,11 +99,12 @@ public class ChasmMIDlet extends MIDlet {
         if (canvas == null || sound == null) return;
         RecordStore rs = null;
         try {
-            byte[] data = new byte[4];
+            byte[] data = new byte[5];
             data[0] = (byte) canvas.getSelectedStartLevel();
             data[1] = (byte) canvas.getRenderer3D().shadingMode;
             data[2] = (byte) (sound.musicEnabled ? 1 : 0);
             data[3] = (byte) (sound.sfxEnabled ? 1 : 0);
+            data[4] = (byte) (canvas.getWorld().enemyBehavior & 1);
 
             rs = RecordStore.openRecordStore(RMS_NAME, true);
             if (rs.getNumRecords() >= 1) {

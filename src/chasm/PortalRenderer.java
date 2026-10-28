@@ -936,11 +936,11 @@ public class PortalRenderer {
                     drawSkyboxColumn(column, 0, screenCeilingY, viewAngle);
                 }
 
-                // Draw upper wall or update floor span
+                // Draw upper wall or update floor span — 12,12,16 прозрачен -> скайбокс
                 if (ceilingY < upperBottomY) {
                     drawWallTextureColumn(upperTexture.getPixelRowFast(textureColumn), textureColumn & 1,
-                            upperTexture.colorPalettes[effectiveLightLevel], column,
-                            screenCeilingY, screenUpperBottomY, upperTextureOffsetV, upperWallHeight, upperTextureHeight);
+                            upperTexture.colorPalettes[effectiveLightLevel], upperTexture.transparentMask, column,
+                            screenCeilingY, screenUpperBottomY, upperTextureOffsetV, upperWallHeight, upperTextureHeight, viewAngle);
 
                     if (floorTexture != null) {
                         updateFloorSpan(sectorId, column, screenCeilingY, relativeCeiling);
@@ -961,11 +961,11 @@ public class PortalRenderer {
                     drawSkyboxColumn(column, screenFloorY + 1, MAX_VIEWPORT_Y, viewAngle);
                 }
 
-                // Draw lower wall
+                // Draw lower wall — 12,12,16 прозрачен -> скайбокс
                 if (lowerTopY < floorY) {
                     drawWallTextureColumn(lowerTexture.getPixelRowFast(textureColumn), textureColumn & 1,
-                            lowerTexture.colorPalettes[effectiveLightLevel], column,
-                            screenLowerTopY, screenFloorY, lowerTextureOffsetV, lowerWallHeight, lowerTextureHeight);
+                            lowerTexture.colorPalettes[effectiveLightLevel], lowerTexture.transparentMask, column,
+                            screenLowerTopY, screenFloorY, lowerTextureOffsetV, lowerWallHeight, lowerTextureHeight, viewAngle);
 
                     if (ceilingTexture != null) {
                         updateCeilingSpan(sectorId, column, screenFloorY + 1, relativeFloor);
@@ -1318,8 +1318,32 @@ public class PortalRenderer {
      * @param wallHeight    Wall height in texels
      * @param textureHeight Texture height for masking
      */
-    private static void drawWallTextureColumn(byte[] pixelData, int pixelNibble, int[] colorPalette,
-                                              int column, int topY, int bottomY, int textureOffsetV, int wallHeight, int textureHeight) {
+    private static int getSkyboxColorForWallHole(int column, int screenY, int viewAngle) {
+        if (skyboxTexture == null || skyboxTexture.pixelData == null || skyboxTexture.colorPalettes == null) {
+            return skyFlatColor;
+        }
+        int columnAngle = MathUtils.fixedPointMultiply((column - HALF_VIEWPORT_WIDTH) << 16, skyboxAngleFactor);
+        int angleCos = MathUtils.fastCos(columnAngle);
+        int scaledX = MathUtils.fixedPointMultiply(column - HALF_VIEWPORT_WIDTH, skyboxScaleX);
+        int angleSin = MathUtils.fastSin(columnAngle);
+        int textureColumn = MathUtils.fixedPointMultiply(
+                MathUtils.fixedPointMultiply(102943, angleSin + MathUtils.fixedPointMultiply(angleCos, scaledX)) + viewAngle,
+                skyboxOffsetFactor) >> 8;
+        byte[] pixelData = skyboxTexture.getPixelRowFast(textureColumn);
+        int[] colorPalette = skyboxTexture.colorPalettes[8];
+        int textureStepV = MathUtils.fixedPointMultiply(angleCos * 200, skyboxScaleY);
+        int textureV = -textureStepV * (HALF_VIEWPORT_HEIGHT - screenY) + 6553600;
+        int idx;
+        if ((textureColumn & 1) == 0) {
+            idx = (pixelData[(textureV >> 16) & 127] >> 4) & 15;
+        } else {
+            idx = pixelData[(textureV >> 16) & 127] & 15;
+        }
+        return colorPalette[idx];
+    }
+
+    private static void drawWallTextureColumn(byte[] pixelData, int pixelNibble, int[] colorPalette, int transparentMask,
+                                              int column, int topY, int bottomY, int textureOffsetV, int wallHeight, int textureHeight, int viewAngle) {
 
         short floorClipY = Sector.floorClip[column];
         short ceilingClipY = Sector.ceilingClip[column];
@@ -1350,53 +1374,87 @@ public class PortalRenderer {
         int textureV = (clippedTopY - topY) * textureStepV + ((textureOffsetV & textureMask) << 16);
         int[] buffer = screenBuffer;
 
-        // Optimized loops for common texture heights
-        switch (textureHeight + pixelNibble) {
-            case 16: // Height 16, high nibble
-                for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
-                    buffer[pixelIndex] = colorPalette[(pixelData[(textureV & 0xF0000) >> 16] >> 4) & 15];
-                    textureV += textureStepV;
-                }
-                return;
-
-            case 17: // Height 16, low nibble
-                for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
-                    buffer[pixelIndex] = colorPalette[pixelData[(textureV & 0xF0000) >> 16] & 15];
-                    textureV += textureStepV;
-                }
-                return;
-
-            case 64: // Height 64, high nibble
-                for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
-                    buffer[pixelIndex] = colorPalette[(pixelData[(textureV & 0x3F0000) >> 16] >> 4) & 15];
-                    textureV += textureStepV;
-                }
-                return;
-
-            case 65: // Height 64, low nibble
-                for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
-                    buffer[pixelIndex] = colorPalette[pixelData[(textureV & 0x3F0000) >> 16] & 15];
-                    textureV += textureStepV;
-                }
-                return;
-
-            case 128: // Height 128, high nibble
-                for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
-                    buffer[pixelIndex] = colorPalette[(pixelData[(textureV & 0x7F0000) >> 16] >> 4) & 15];
-                    textureV += textureStepV;
-                }
-                return;
-
-            case 129: // Height 128, low nibble
-                for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
-                    buffer[pixelIndex] = colorPalette[pixelData[(textureV & 0x7F0000) >> 16] & 15];
-                    textureV += textureStepV;
-                }
-                return;
-
-            default:
-                // Generic case - should not normally be reached
-                return;
+        // 12,12,16 прозрачность — сквозь дыры рендерим скайбокс (иначе небо плывёт)
+        if (transparentMask != 0) {
+            switch (textureHeight + pixelNibble) {
+                case 16:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        int idx = (pixelData[(textureV & 0xF0000) >> 16] >> 4) & 15;
+                        if ((transparentMask & (1 << idx)) == 0) buffer[pixelIndex] = colorPalette[idx];
+                        else { int sy = clippedTopY + (pixelIndex - startPixelIndex) / VIEWPORT_WIDTH; buffer[pixelIndex] = getSkyboxColorForWallHole(column, sy, viewAngle); }
+                        textureV += textureStepV;
+                    } return;
+                case 17:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        int idx = pixelData[(textureV & 0xF0000) >> 16] & 15;
+                        if ((transparentMask & (1 << idx)) == 0) buffer[pixelIndex] = colorPalette[idx];
+                        else { int sy = clippedTopY + (pixelIndex - startPixelIndex) / VIEWPORT_WIDTH; buffer[pixelIndex] = getSkyboxColorForWallHole(column, sy, viewAngle); }
+                        textureV += textureStepV;
+                    } return;
+                case 64:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        int idx = (pixelData[(textureV & 0x3F0000) >> 16] >> 4) & 15;
+                        if ((transparentMask & (1 << idx)) == 0) buffer[pixelIndex] = colorPalette[idx];
+                        else { int sy = clippedTopY + (pixelIndex - startPixelIndex) / VIEWPORT_WIDTH; buffer[pixelIndex] = getSkyboxColorForWallHole(column, sy, viewAngle); }
+                        textureV += textureStepV;
+                    } return;
+                case 65:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        int idx = pixelData[(textureV & 0x3F0000) >> 16] & 15;
+                        if ((transparentMask & (1 << idx)) == 0) buffer[pixelIndex] = colorPalette[idx];
+                        else { int sy = clippedTopY + (pixelIndex - startPixelIndex) / VIEWPORT_WIDTH; buffer[pixelIndex] = getSkyboxColorForWallHole(column, sy, viewAngle); }
+                        textureV += textureStepV;
+                    } return;
+                case 128:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        int idx = (pixelData[(textureV & 0x7F0000) >> 16] >> 4) & 15;
+                        if ((transparentMask & (1 << idx)) == 0) buffer[pixelIndex] = colorPalette[idx];
+                        else { int sy = clippedTopY + (pixelIndex - startPixelIndex) / VIEWPORT_WIDTH; buffer[pixelIndex] = getSkyboxColorForWallHole(column, sy, viewAngle); }
+                        textureV += textureStepV;
+                    } return;
+                case 129:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        int idx = pixelData[(textureV & 0x7F0000) >> 16] & 15;
+                        if ((transparentMask & (1 << idx)) == 0) buffer[pixelIndex] = colorPalette[idx];
+                        else { int sy = clippedTopY + (pixelIndex - startPixelIndex) / VIEWPORT_WIDTH; buffer[pixelIndex] = getSkyboxColorForWallHole(column, sy, viewAngle); }
+                        textureV += textureStepV;
+                    } return;
+                default: return;
+            }
+        } else {
+            switch (textureHeight + pixelNibble) {
+                case 16:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        buffer[pixelIndex] = colorPalette[(pixelData[(textureV & 0xF0000) >> 16] >> 4) & 15];
+                        textureV += textureStepV;
+                    } return;
+                case 17:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        buffer[pixelIndex] = colorPalette[pixelData[(textureV & 0xF0000) >> 16] & 15];
+                        textureV += textureStepV;
+                    } return;
+                case 64:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        buffer[pixelIndex] = colorPalette[(pixelData[(textureV & 0x3F0000) >> 16] >> 4) & 15];
+                        textureV += textureStepV;
+                    } return;
+                case 65:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        buffer[pixelIndex] = colorPalette[pixelData[(textureV & 0x3F0000) >> 16] & 15];
+                        textureV += textureStepV;
+                    } return;
+                case 128:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        buffer[pixelIndex] = colorPalette[(pixelData[(textureV & 0x7F0000) >> 16] >> 4) & 15];
+                        textureV += textureStepV;
+                    } return;
+                case 129:
+                    for (int pixelIndex = startPixelIndex; pixelIndex <= endPixelIndex; pixelIndex += VIEWPORT_WIDTH) {
+                        buffer[pixelIndex] = colorPalette[pixelData[(textureV & 0x7F0000) >> 16] & 15];
+                        textureV += textureStepV;
+                    } return;
+                default: return;
+            }
         }
     }
 
