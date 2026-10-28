@@ -219,7 +219,12 @@ public final class CustomMaterialSet {
             throw new IOException("Wall height must be 16, 64 or 128: " + path);
         }
 
-        Texture texture = new Texture(slot, bmp.width, bmp.height, 0, 0, first16Colors(bmp.palette));
+        int[] pal16 = first16Colors(bmp.palette);
+        Texture texture = new Texture(slot, bmp.width, bmp.height, 0, 0, pal16);
+        // RGB 12,12,16 = прозрачный для BMP стен (решётки, заборы)
+        for (int i = 0; i < pal16.length; i++) {
+            if ((pal16[i] & 0xFFFFFF) == 0x0C0C10) texture.transparentMask |= (1 << i);
+        }
         for (int x = 0; x < bmp.width; x += 2) {
             byte[] column = new byte[bmp.height];
             for (int y = 0; y < bmp.height; ++y) {
@@ -256,8 +261,9 @@ public final class CustomMaterialSet {
             throw new IOException("Sprite dimensions must be 1..255: " + path);
         }
 
-        Texture texture = new Texture((byte)-slot, bmp.width, bmp.height, 0, 0,
-                first16Colors(bmp.palette));
+        int[] pal16s = first16Colors(bmp.palette);
+        Texture texture = new Texture((byte)-slot, bmp.width, bmp.height, 0, 0, pal16s);
+        for (int i = 0; i < pal16s.length; i++) if ((pal16s[i] & 0xFFFFFF) == 0x0C0C10) texture.transparentMask |= (1 << i);
         for (int x = 0; x < bmp.width; x += 2) {
             byte[] column = new byte[bmp.height];
             for (int y = 0; y < bmp.height; ++y) {

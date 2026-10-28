@@ -13,6 +13,7 @@ public final class Texture {
     public int[][] colorPalettes; // 16 color palettes with different lighting levels
     public byte textureType;      // Texture type identifier
     private int widthMask;        // Mask for fast modulo operations (width - 1)
+    public int transparentMask = 0; // bit i = palette index i is прозрачный (12,12,16)
 
     // Palette level 8 is the authored texture color. The remaining levels
     // describe exposure in approximately linear light: three stops below the

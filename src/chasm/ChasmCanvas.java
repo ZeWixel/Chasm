@@ -19,6 +19,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     public static final int SCREEN_PAUSED    = 3;
     public static final int SCREEN_CONTROLS  = 4;
     public static final int SCREEN_VICTORY   = 5;
+    public static final int SCREEN_OPTIONS   = 6;
 
     // Nokia S60 & Sony Ericsson softkey keycodes
     private static final int KEY_SOFT_LEFT1  = -6;
@@ -39,8 +40,11 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     public int screenState = SCREEN_MAIN_MENU;
     private int menuCursor = 0;
     private int pauseCursor = 0;
-    private static final int PAUSE_ITEMS = 8;
-    private int selectedStartLevel = 0; // 0..GameWorld.NUM_LEVELS-1
+    private static final int PAUSE_ITEMS = 6;
+    private int optionsCursor = 0;
+    private static final int OPTIONS_ITEMS = 4;
+    private int optionsReturnScreen = SCREEN_MAIN_MENU;
+    private int selectedStartLevel = 0; // 0..3
     private boolean showAutomap = false;
 
     private int scrW = 240;
@@ -147,10 +151,16 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     }
 
     private void updateLogic() {
-        if (screenState == SCREEN_MAIN_MENU) {
-            // Gently pan camera in background portal preview
+        if (screenState == SCREEN_MAIN_MENU || screenState == SCREEN_OPTIONS && optionsReturnScreen == SCREEN_MAIN_MENU) {
+            // Gently pan camera in background portal preview (also in main-menu OPTIONS)
             world.playerBody.rotation = MathUtils.wrapAngle(world.playerBody.rotation + 900);
             world.levelTick++;
+            return;
+        }
+
+        if (screenState == SCREEN_OPTIONS || screenState == SCREEN_PAUSED
+                || screenState == SCREEN_CONTROLS || screenState == SCREEN_BRIEFING
+                || screenState == SCREEN_VICTORY) {
             return;
         }
 
@@ -195,7 +205,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 world.loadLevel(selectedStartLevel);
                 if (midlet != null) midlet.saveSettings();
                 screenState = SCREEN_BRIEFING;
-                if (sound != null) sound.playMusic(GameWorld.musicTrackFor(selectedStartLevel));
+                if (sound != null) sound.playMusic(selectedStartLevel + 1);
             } else {
                 screenState = SCREEN_VICTORY;
                 if (sound != null) sound.playMusic(0);
@@ -223,6 +233,15 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             case SCREEN_PAUSED:
                 drawPlayingView(g);
                 drawPauseOverlay(g);
+                break;
+            case SCREEN_OPTIONS:
+                if (optionsReturnScreen == SCREEN_PAUSED) {
+                    drawPlayingView(g);
+                    // dim slightly for pause options
+                    g.setColor(0x101410);
+                    // semi overlay is handled inside drawOptionsScreen but we keep underlying view
+                }
+                drawOptionsScreen(g);
                 break;
             case SCREEN_CONTROLS:
                 drawControlsScreen(g);
@@ -312,24 +331,45 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         }
 
         if (model != null && model.fCount > 0) {
-            int frames = model.fCount;
-            int step = (t >> 2);
-            int fA = step % frames;
-            int fB = (fA + 1) % frames;
+            // Only walk animation (frames 2..4) — do not cycle death/pain frames
+            int step = (t >> 2) % 3;
+            int fA = 2 + step;
+            int fB = 2 + ((step + 1) % 3);
             int interp = (t & 3) << 6;
+            // Clamp if model has fewer frames than expected (e.g. some have 8 not 10)
+            if (model.fCount <= 4) {
+                // Fallback to any frame loop if walk frames missing
+                fA = (t >> 2) % model.fCount;
+                fB = (fA + 1) % model.fCount;
+            }
             // Undo the camera yaw so the monster turns on its own axis, not with the menu pan.
             int spin = MathUtils.wrapAngle(t * 700 + world.playerBody.rotation);
+            // Камера на том же уровне что и у игрока в игре (PLAYER_HEIGHT_OFFSET=40)
+            int distFP, scaleFP, camH;
+            int playerCamH = GameWorld.PLAYER_HEIGHT_OFFSET << 16; // 40<<16 = 2621440, как в GameWorld.render3DView
+            if (h >= 130) { // scrH >=320, winH=132
+                distFP = 78 << 16; scaleFP = 2000; camH = playerCamH;
+            } else if (h >= 100) { // scrH >=280, winH=104
+                distFP = 84 << 16; scaleFP = 1850; camH = playerCamH;
+            } else if (h >= 70) { // scrH >=240, winH=78
+                distFP = 90 << 16; scaleFP = 1500; camH = playerCamH;
+            } else { // small screens
+                distFP = 96 << 16; scaleFP = 1200; camH = playerCamH;
+            }
+            // Прозрачность врагов как в PNG (индексы 0/255) — в игре должна быть видна
+            world.polyRenderer.setTransparentHoles(true);
             world.polyRenderer.renderWorldModel(
                     model,
-                    0, 0, 96 << 16,
+                    0, 0, distFP,
                     spin,
                     fA, fB, interp,
                     0xFF,
-                    1100,
-                    0, 786432, 0,
+                    scaleFP,
+                    0, camH, 0,
                     0, 65536,
                     236, 0,
                     false, buf);
+            world.polyRenderer.setTransparentHoles(false);
         }
 
         g.drawRGB(buf, by * vw + bx, vw, x, y, w, h, false);
@@ -357,32 +397,40 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             g.fillRect(0, 0, scrW, scrH);
         }
 
-        // Live enemy window (first-build style): the 3D monsters animate in place of the LOADING logo.
-        int winH = scrH >= 280 ? 96 : 64;
-        int winW = (winH * 4) / 3;
+        // Live enemy window: slightly reduced per request, still ~2x zoom
+        int winH, winW;
+        if (scrH >= 320) {
+            winH = 132; // reduced from 148 per user
+        } else if (scrH >= 280) {
+            winH = 104; // reduced from 118
+        } else if (scrH >= 240) {
+            winH = 78; // reduced from 88
+        } else {
+            winH = 54; // reduced from 60
+        }
+        winW = (winH * 4) / 3;
         int winX = (scrW - winW) >> 1;
-        int topY = 6;
-        drawEnemyPreviewWindow(g, winX, topY, winW, winH);
-        topY += winH + 18;
 
-        String shadeStr = PolyRenderer3D.SHADE_NAMES[world.polyRenderer.shadingMode];
-        String soundStr = (sound != null && sound.musicEnabled) ? "ON" : "OFF";
-
-        Font smallFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN, Font.SIZE_SMALL);
         String[] items = {
-            "NEW / START MISSION",
-            levelMenuText(smallFont, selectedStartLevel, scrW - 36),
-            "3D SHADING: " + shadeStr,
-            "AUDIO (MIDI+WAV): " + soundStr,
-            "CONTROLS & HELP",
-            "EXIT GAME"
+            TextTable.get("MENU_START", "START MISSION"),
+            TextTable.get("MENU_MAP_PREFIX", "MAP: ") + GameWorld.LEVEL_NAMES[selectedStartLevel],
+            TextTable.get("MENU_OPTIONS", "OPTIONS"),
+            TextTable.get("MENU_CONTROLS", "CONTROLS & HELP"),
+            TextTable.get("MENU_EXIT", "EXIT GAME")
         };
-
         int boxW = scrW - 20;
-        int boxH = 6 * 22 + 14;
+        int boxH = 5 * 22 + 14;
         int boxX = 10;
-        int boxY = topY + 2;
-        if (boxY + boxH > scrH - hudH - 4) boxY = scrH - hudH - 4 - boxH;
+
+        // Center combined block but lift preview up slightly to increase gap to menu
+        int gap = 22;
+        int totalH = winH + gap + boxH;
+        int centeredTop = (scrH - totalH) >> 1;
+        if (centeredTop < 4) centeredTop = 4;
+        int topY = centeredTop - 6;
+        if (topY < 4) topY = 4;
+        drawEnemyPreviewWindow(g, winX, topY, winW, winH);
+        int boxY = topY + winH + gap;
 
         g.setColor(0x101410);
         g.fillRect(boxX, boxY, boxW, boxH);
@@ -391,6 +439,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.setColor(0x52401C);
         g.drawRect(boxX + 2, boxY + 2, boxW - 5, boxH - 5);
 
+        Font smallFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
         g.setFont(smallFont);
         int listY = boxY + 7;
         for (int i = 0; i < items.length; i++) {
@@ -406,17 +455,6 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 g.drawString(items[i], scrW >> 1, iy, Graphics.TOP | Graphics.HCENTER);
             }
         }
-
-        // Bottom HUD strip (STATUS2.CEL) with the menu hint
-        int stripY = scrH - hudH;
-        g.setColor(0x1C201C);
-        g.fillRect(0, stripY, scrW, hudH);
-        if (UiAssets.hud != null && UiAssets.hudW > 0 && UiAssets.hudW <= scrW) {
-            int hx = (scrW - UiAssets.hudW) >> 1;
-            g.drawRGB(UiAssets.hud, 0, UiAssets.hudW, hx, stripY, UiAssets.hudW, Math.min(UiAssets.hudH, hudH), true);
-        }
-        g.setColor(0xD8D0A0);
-        g.drawString("2/8 MOVE   5 SELECT", scrW >> 1, stripY + 10, Graphics.TOP | Graphics.HCENTER);
     }
 
     private void drawBriefingScreen(Graphics g) {
@@ -428,12 +466,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         Font bold = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_MEDIUM);
         Font small = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN, Font.SIZE_SMALL);
 
-        String title = GameWorld.levelLabel(world.currentLevel, false);
-        // The numbered title falls back to the small font when the medium one does not fit.
-        Font titleFont = bold.stringWidth(title) <= scrW - 12 ? bold : small;
-        g.setFont(titleFont);
+        g.setFont(bold);
         g.setColor(0xFFCC44);
-        g.drawString(title, scrW >> 1, 18, Graphics.TOP | Graphics.HCENTER);
+        g.drawString(GameWorld.LEVEL_NAMES[world.currentLevel], scrW >> 1, 18, Graphics.TOP | Graphics.HCENTER);
 
         g.setFont(small);
         g.setColor(0xD0D8C8);
@@ -467,20 +502,25 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             drawAutomapOverlay(g);
         }
 
-        // 4. Draw top HUD message banner if active
+        // 4. Draw top HUD message banner if active - flashing when SECTOR CLEAR (kill-all complete)
         Font smallFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
         g.setFont(smallFont);
         // 4a. Developer overlay (coords / FPS / LIMBS) pushes the message banner down
         int topY = world.devMode ? drawDevBar(g, smallFont) : 0;
         if (world.hudMessageTimer > 0 && world.hudMessage != null) {
-            g.setColor(0x101410);
-            g.fillRect(0, topY, scrW, 16);
-            g.setColor(0xFFE066);
-            g.drawString(world.hudMessage, scrW >> 1, topY + 1, Graphics.TOP | Graphics.HCENTER);
+            boolean isSectorClear = world.hudMessage.indexOf("SECTOR CLEAR") >= 0;
+            // Flashing: skip drawing every 4 ticks (8-frame period) for flashing effect
+            if (!isSectorClear || ((world.levelTick >> 2) & 1) == 0) {
+                g.setColor(0x101410);
+                g.fillRect(0, topY, scrW, 16);
+                g.setColor(0xFFE066);
+                g.drawString(world.hudMessage, scrW >> 1, topY + 1, Graphics.TOP | Graphics.HCENTER);
+            } else if (isSectorClear) {
+                // Draw empty banner background even during flash-off to keep height
+                g.setColor(0x101410);
+                g.fillRect(0, topY, scrW, 16);
+            }
         }
-
-        // 4b. Key indicator in the top-right corner of the 3D view
-        drawKeyIndicators(g, topY);
 
         // 5. Draw Chasm bottom status bar HUD
         drawStatusBar(g, smallFont);
@@ -493,55 +533,76 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.fillRect(0, barY, scrW, hudH);
         g.setColor(0x786434);
         g.drawRect(0, barY, scrW - 1, hudH - 1);
-        int b1 = scrW / 3;
-        int b2 = (scrW * 2) / 3;
-        g.drawLine(b1, barY, b1, barY + hudH);
-        g.drawLine(b2, barY, b2, barY + hudH);
         g.setFont(font);
-
-        // Two rows: with 16px icons on a 32px strip, otherwise text-only rows.
-        boolean icons = hudH >= 32 && UiAssets.iconHp != null;
-        int rowA = icons ? barY : barY + 2;
-        int rowB = icons ? barY + 16 : barY + 14;
         int fh = font.getHeight();
+        boolean icons = hudH >= 32 && UiAssets.iconHp != null;
         int textOff = icons ? (16 - fh) >> 1 : 0;
-
-        // Left box: HP and armour
-        int lx = icons ? 19 : 6;
-        g.setColor(world.health <= 25 ? 0xFF4444 : 0xFFCC44);
-        if (icons) g.drawRGB(UiAssets.iconHp, 0, 16, 2, rowA, 16, 16, true);
-        g.drawString(icons ? String.valueOf(world.health) : "HP:" + world.health,
-                lx, rowA + textOff, Graphics.TOP | Graphics.LEFT);
-        g.setColor(0x88CCFF);
-        if (icons) g.drawRGB(UiAssets.iconAr, 0, 16, 2, rowB, 16, 16, true);
-        g.drawString(icons ? String.valueOf(world.armor) : "AR:" + world.armor,
-                lx, rowB + textOff, Graphics.TOP | Graphics.LEFT);
-
-        // Centre box: weapon name and ammo
-        int cx = scrW >> 1;
-        g.setColor(0xFFE066);
-        g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], cx, rowA + (icons ? textOff : 0),
-                Graphics.TOP | Graphics.HCENTER);
-        String ammoStr = icons ? String.valueOf(world.ammo[world.curWeapon])
-                               : "AMMO:" + world.ammo[world.curWeapon];
-        g.setColor(0xD8D8C8);
+        // HUD redesign (closer to original PC screenshot image-4):
+        // Top row (y = barY): HP | Armor | Ammo in one row (three equal columns)
+        // Bottom row (y = barY+16): Weapon name (left half) | Enemies remaining (right half)
+        // No LEVEL display in HUD — level is shown in pause menu.
         if (icons) {
-            int total = 16 + 4 + font.stringWidth(ammoStr);
-            int ax = cx - (total >> 1);
-            g.drawRGB(UiAssets.iconAmmo, 0, 16, ax, rowB, 16, 16, true);
-            g.drawString(ammoStr, ax + 20, rowB + textOff, Graphics.TOP | Graphics.LEFT);
+            int rowTop = barY;
+            int rowBot = barY + 16;
+            int slotW = scrW / 3;
+            // Top row: HP / Armor / Ammo centered in each third
+            String hpStr = String.valueOf(world.health);
+            String arStr = String.valueOf(world.armor);
+            String amStr = String.valueOf(world.ammo[world.curWeapon]);
+            // Slot 0: HP
+            {
+                int tw = font.stringWidth(hpStr);
+                int contentW = 16 + 4 + tw;
+                int cx = slotW >> 1;
+                int left = cx - (contentW >> 1);
+                g.setColor(world.health <= 25 ? 0xFF4444 : 0xFFCC44);
+                g.drawRGB(UiAssets.iconHp, 0, 16, left, rowTop, 16, 16, true);
+                g.drawString(hpStr, left + 20, rowTop + textOff, Graphics.TOP | Graphics.LEFT);
+            }
+            // Slot 1: Armor
+            {
+                int tw = font.stringWidth(arStr);
+                int contentW = 16 + 4 + tw;
+                int cx = slotW + (slotW >> 1);
+                int left = cx - (contentW >> 1);
+                g.setColor(0x88CCFF);
+                g.drawRGB(UiAssets.iconAr, 0, 16, left, rowTop, 16, 16, true);
+                g.drawString(arStr, left + 20, rowTop + textOff, Graphics.TOP | Graphics.LEFT);
+            }
+            // Slot 2: Ammo
+            {
+                int tw = font.stringWidth(amStr);
+                int contentW = 16 + 4 + tw;
+                int cx = (slotW * 2) + (slotW >> 1);
+                int left = cx - (contentW >> 1);
+                g.setColor(0xD8D8C8);
+                g.drawRGB(UiAssets.iconAmmo, 0, 16, left, rowTop, 16, 16, true);
+                g.drawString(amStr, left + 20, rowTop + textOff, Graphics.TOP | Graphics.LEFT);
+            }
+            // Bottom row: weapon name on left half, enemy count on right half
+            g.setColor(0xFFE066);
+            g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], scrW >> 2, rowBot + textOff, Graphics.TOP | Graphics.HCENTER);
+            g.setColor(0xFF9988);
+            g.drawString("ENEMIES: " + countEnemiesAlive(), (scrW * 3) >> 2, rowBot + textOff, Graphics.TOP | Graphics.HCENTER);
+            // Thin divider between top and bottom rows
+            g.setColor(0x786434);
+            g.drawLine(0, rowBot, scrW, rowBot);
         } else {
-            g.drawString(ammoStr, cx, rowB, Graphics.TOP | Graphics.HCENTER);
+            // Compact (no icons): top row 3 values text, bottom row 2 values
+            int rowTop = barY + 2;
+            int rowBot = barY + 14;
+            int slotW = scrW / 3;
+            g.setColor(world.health <= 25 ? 0xFF4444 : 0xFFCC44);
+            g.drawString(String.valueOf(world.health), slotW >> 1, rowTop, Graphics.TOP | Graphics.HCENTER);
+            g.setColor(0x88CCFF);
+            g.drawString(String.valueOf(world.armor), slotW + (slotW >> 1), rowTop, Graphics.TOP | Graphics.HCENTER);
+            g.setColor(0xD8D8C8);
+            g.drawString(String.valueOf(world.ammo[world.curWeapon]), (slotW * 2) + (slotW >> 1), rowTop, Graphics.TOP | Graphics.HCENTER);
+            g.setColor(0xFFE066);
+            g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], scrW >> 2, rowBot, Graphics.TOP | Graphics.HCENTER);
+            g.setColor(0xFF9988);
+            g.drawString("ENEMIES " + countEnemiesAlive(), (scrW * 3) >> 2, rowBot, Graphics.TOP | Graphics.HCENTER);
         }
-
-        // Right box: enemies still alive on this level and the level number
-        int rx = b2 + 5;
-        g.setColor(0xFF9988);
-        g.drawString("ENEMY " + countEnemiesAlive(), rx, rowA + (icons ? textOff : 0),
-                Graphics.TOP | Graphics.LEFT);
-        g.setColor(0xC8D8A8);
-        g.drawString("LEVEL " + (world.currentLevel + 1), rx, rowB + (icons ? textOff : 0),
-                Graphics.TOP | Graphics.LEFT);
     }
 
     /** Monsters that are not dead and not dormant (used by the bottom HUD). */
@@ -628,28 +689,6 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             }
         }
 
-        // Doors: a 5x5 mark in the colour of the key that opens them (grey = no key).
-        int[] doors = world.automapDoorCells();
-        for (int d = 0; d < doors.length; d += 3) {
-            int mx = cx + (((((doors[d] - 32) * 96) + 48) - (px)) >> 3);
-            int my = cy - (((((doors[d + 1] - 32) * 96) + 48) - (pz)) >> 3);
-            g.setColor(keyColor(doors[d + 2]));
-            g.fillRect(mx - 2, my - 2, 5, 5);
-        }
-
-        // Keys on the map, in their colour (green 28, red 27, blue 29).
-        for (int i = 0; i < GameWorld.MAX_ITEMS && i < world.itemCount; i++) {
-            if (!world.itemActive[i]) continue;
-            int m = world.itemModelId[i];
-            if (m != 27 && m != 28 && m != 29) continue;
-            int kx = cx + (((world.itemX[i] >> 16) - px) >> 3);
-            int ky = cy - (((world.itemZ[i] >> 16) - pz) >> 3);
-            g.setColor(m == 28 ? 0x33DD44 : (m == 27 ? 0xDD3322 : 0x3366FF));
-            g.fillRect(kx - 2, ky - 2, 5, 5);
-            g.setColor(0xFFFFFF);
-            g.drawRect(kx - 2, ky - 2, 4, 4);
-        }
-
         // Monsters
         for (int m = 0; m < world.monCount; m++) {
             if (world.monState[m] == GameWorld.MSTATE_INACTIVE) continue;
@@ -664,7 +703,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
 
         // Player marker: a triangle pointing where the player faces. World forward is (sin, cos)
         // in (x, z); the map's y axis points up, so screen direction is (sin, -cos).
-        int sinA = MathUtils.fastSin(world.playerBody.rotation) >> 10;   // about +-64
+        int sinA = MathUtils.fastSin(world.playerBody.rotation) >> 10;
         int cosA = MathUtils.fastCos(world.playerBody.rotation) >> 10;
         int ux = sinA;
         int uy = -cosA;
@@ -673,14 +712,6 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 cx + (ux * 6) / 64, cy + (uy * 6) / 64,
                 cx + (-ux * 4 - uy * 3) / 64, cy + (-uy * 4 + ux * 3) / 64,
                 cx + (-ux * 4 + uy * 3) / 64, cy + (-uy * 4 - ux * 3) / 64);
-    }
-
-    /** Key colours used on the automap: 1 green, 2 red, 3 blue, 0 no key (grey). */
-    private static int keyColor(int keyId) {
-        if (keyId == 1) return 0x33DD44;
-        if (keyId == 2) return 0xDD3322;
-        if (keyId == 3) return 0x3366FF;
-        return 0xBBBBBB;
     }
 
     /** Filled triangle by scanlines (MIDP 2.0 Graphics has no fillTriangle). */
@@ -709,22 +740,6 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         }
     }
 
-    /** Key indicator in the top-right corner of the 3D view: green and red keys, lit when held. */
-    private void drawKeyIndicators(Graphics g, int topY) {
-        int x = viewW - 6;
-        // Right-to-left: red (rightmost) then green.
-        for (int k = 0; k < 2; k++) {
-            boolean held = k == 0 ? world.hasRedKey : world.hasGreenKey;
-            x -= 14;
-            int y = topY + 3;
-            g.setColor(held ? (k == 0 ? 0xDD3322 : 0x33DD44) : 0x202420);
-            g.fillRect(x, y, 12, 12);
-            g.setColor(held ? 0xFFFFFF : 0x556655);
-            g.drawRect(x, y, 11, 11);
-            g.drawString(k == 0 ? "R" : "G", x + 6, y + 1, Graphics.TOP | Graphics.HCENTER);
-        }
-    }
-
     private void drawPauseOverlay(Graphics g) {
         int boxW = scrW - 32;
         int boxH = 32 + PAUSE_ITEMS * 19 + 8;
@@ -741,16 +756,13 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.setColor(0xFFCC44);
         g.drawString("GAME PAUSED", scrW >> 1, boxY + 8, Graphics.TOP | Graphics.HCENTER);
 
-        String shadeStr = PolyRenderer3D.SHADE_NAMES[world.polyRenderer.shadingMode];
         String[] opts = {
-            "RESUME MISSION",
-            "SHADING: " + shadeStr,
-            "DEV MODE: " + (world.devMode ? "ON" : "OFF"),
-            "MUSIC: " + (sound != null && sound.musicEnabled ? "ON" : "OFF"),
-            "SOUND FX: " + (sound != null && sound.sfxEnabled ? "ON" : "OFF"),
-            "SKIP TO NEXT LEVEL",
-            "MAIN MENU",
-            "QUIT TO PHONE"
+            TextTable.get("PAUSE_RESUME", "RESUME MISSION"),
+            TextTable.get("PAUSE_OPTIONS", "OPTIONS"),
+            TextTable.get("PAUSE_DEVMODE_PREFIX", "DEV MODE: ") + (world.devMode ? TextTable.get("ON_OFF_ON","ON") : TextTable.get("ON_OFF_OFF","OFF")),
+            TextTable.get("PAUSE_SKIP", "SKIP TO NEXT LEVEL"),
+            TextTable.get("PAUSE_MAINMENU", "MAIN MENU"),
+            TextTable.get("PAUSE_QUIT", "QUIT TO PHONE")
         };
 
         int y = boxY + 32;
@@ -767,6 +779,74 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         }
     }
 
+    private void drawOptionsScreen(Graphics g) {
+        // Options screen used from both Main Menu and Pause
+        // Determine context: if coming from pause, draw on top of paused view, else full background
+        if (optionsReturnScreen == SCREEN_MAIN_MENU) {
+            UiAssets.ensureLoaded();
+            if (UiAssets.tile != null && UiAssets.tileW > 0) {
+                for (int yy = 0; yy < scrH; yy += UiAssets.tileH) {
+                    for (int xx = 0; xx < scrW; xx += UiAssets.tileW) {
+                        g.drawRGB(UiAssets.tile, 0, UiAssets.tileW, xx, yy, UiAssets.tileW, UiAssets.tileH, true);
+                    }
+                }
+            } else {
+                g.setColor(0x121412);
+                g.fillRect(0, 0, scrW, scrH);
+            }
+        } else {
+            // Pause context: dim the playing view is already underneath, draw semi box
+            // Just draw a dark overlay first
+            g.setColor(0x101410);
+            g.fillRect(0, 0, scrW, scrH);
+        }
+
+        String shadeStr = PolyRenderer3D.SHADE_NAMES[world.polyRenderer.shadingMode];
+        String behaviorStr = GameWorld.ENEMY_BEHAVIOR_NAMES[world.enemyBehavior & 1];
+        // Шейдинг имена тоже могут быть в открытом тексте
+        String onStr = TextTable.get("ON_OFF_ON","ON");
+        String offStr = TextTable.get("ON_OFF_OFF","OFF");
+        String[] opts = {
+            TextTable.get("OPTIONS_SHADING_PREFIX","3D SHADING: ") + shadeStr,
+            TextTable.get("OPTIONS_MUSIC_PREFIX","MUSIC: ") + (sound != null && sound.musicEnabled ? onStr : offStr),
+            TextTable.get("OPTIONS_SFX_PREFIX","SOUND FX: ") + (sound != null && sound.sfxEnabled ? onStr : offStr),
+            TextTable.get("OPTIONS_ENEMY_PREFIX","ENEMY BEHAVIOR: ") + behaviorStr
+        };
+
+        int boxW = scrW - 20;
+        int boxH = 32 + OPTIONS_ITEMS * 22 + 18;
+        int boxX = 10;
+        int boxY = (scrH - boxH) >> 1;
+        // Keep box on screen
+        if (boxY < 4) boxY = 4;
+        g.setColor(0x101410);
+        g.fillRect(boxX, boxY, boxW, boxH);
+        g.setColor(0x9A7B38);
+        g.drawRect(boxX, boxY, boxW - 1, boxH - 1);
+        g.setColor(0x52401C);
+        g.drawRect(boxX + 2, boxY + 2, boxW - 5, boxH - 5);
+
+        Font smallFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
+        g.setFont(smallFont);
+        g.setColor(0xFFCC44);
+        g.drawString("OPTIONS", scrW >> 1, boxY + 6, Graphics.TOP | Graphics.HCENTER);
+
+        int y = boxY + 32;
+        for (int i = 0; i < opts.length; i++) {
+            int iy = y + i * 22;
+            if (i == optionsCursor) {
+                g.setColor(0x3A2C14);
+                g.fillRect(boxX + 8, iy - 2, boxW - 16, 19);
+                g.setColor(0xFFE066);
+                g.drawRect(boxX + 8, iy - 2, boxW - 17, 18);
+                g.drawString(opts[i], scrW >> 1, iy, Graphics.TOP | Graphics.HCENTER);
+            } else {
+                g.setColor(0xC8C4B4);
+                g.drawString(opts[i], scrW >> 1, iy, Graphics.TOP | Graphics.HCENTER);
+            }
+        }
+    }
+
     private void drawControlsScreen(Graphics g) {
         g.setColor(0x101410);
         g.fillRect(0, 0, scrW, scrH);
@@ -780,21 +860,20 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.drawString("CONTROLS & HELP", scrW >> 1, 12, Graphics.TOP | Graphics.HCENTER);
 
         String[] keys = {
-            "2 / 8", "4 / 6", "1 / 3", "5", "9", "7", "* / #", "0", "SOFT"
+            "2 / 8", "4 / 6", "1 / 3", "5", "7", "9", "*", "#", "0", "SOFT"
         };
         String[] acts = {
             "Forward / back",
             "Turn left / right",
             "Strafe left / right",
             "Fire & dismember",
+            "Prev weapon",
+            "Next weapon",
+            "Next level (when clear)",
             "Level map (toggle)",
-            "Open nearest door",
-            "Previous / next weapon",
             "Jump",
             "Pause menu"
         };
-        // Doors, gates, switches and the level exit open on touch; key 7 is a manual fallback
-        // that opens the nearest door (locks still apply).
         g.setFont(plain);
         int y = 36;
         for (int i = 0; i < keys.length; i++) {
@@ -808,7 +887,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.setColor(0x9A9A88);
         g.drawString("TIP: aim at the enemy and fire;", 14, y + 8, Graphics.TOP | Graphics.LEFT);
         g.drawString("sever arms & head for bonus kills.", 14, y + 24, Graphics.TOP | Graphics.LEFT);
-        g.drawString("Clear every enemy, then reach the exit.", 14, y + 40, Graphics.TOP | Graphics.LEFT);
+        g.drawString("Clear every enemy, then press *.", 14, y + 40, Graphics.TOP | Graphics.LEFT);
         g.drawString("Pause > DEV MODE: god mode, position,", 14, y + 62, Graphics.TOP | Graphics.LEFT);
         g.drawString("FPS and LIMBS shown at the top.", 14, y + 78, Graphics.TOP | Graphics.LEFT);
 
@@ -842,16 +921,6 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
 
     // ==================== Keypad Input Handling ====================
 
-    /**
-     * Menu line for the map choice: "MAP: 4 SHMUHER (FIRST BUILD)" if it fits in maxW pixels,
-     * otherwise the short name.
-     */
-    private static String levelMenuText(Font f, int levelIndex, int maxW) {
-        String full = "MAP: " + GameWorld.levelLabel(levelIndex, false);
-        if (f.stringWidth(full) <= maxW) return full;
-        return "MAP: " + GameWorld.levelLabel(levelIndex, true);
-    }
-
     protected void keyPressed(int keyCode) {
         int action = 0;
         try {
@@ -864,11 +933,29 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
 
         if (screenState == SCREEN_MAIN_MENU) {
             if (keyCode == KEY_NUM2 || action == UP) {
-                menuCursor = (menuCursor + 5) % 6;
+                menuCursor = (menuCursor + 4) % 5;
             } else if (keyCode == KEY_NUM8 || action == DOWN) {
-                menuCursor = (menuCursor + 1) % 6;
+                menuCursor = (menuCursor + 1) % 5;
             } else if (keyCode == KEY_NUM5 || action == FIRE || keyCode == KEY_SOFT_LEFT1) {
                 handleMainMenuSelect();
+            } else if (keyCode == KEY_SOFT_RIGHT1 || keyCode == KEY_SE_BACK) {
+                // Back does nothing on main menu
+            }
+            return;
+        }
+
+        if (screenState == SCREEN_OPTIONS) {
+            if (keyCode == KEY_NUM2 || action == UP) {
+                optionsCursor = (optionsCursor + OPTIONS_ITEMS - 1) % OPTIONS_ITEMS;
+            } else if (keyCode == KEY_NUM8 || action == DOWN) {
+                optionsCursor = (optionsCursor + 1) % OPTIONS_ITEMS;
+            } else if (keyCode == KEY_NUM5 || action == FIRE || keyCode == KEY_SOFT_LEFT1
+                    || keyCode == KEY_NUM4 || action == LEFT || keyCode == KEY_NUM6 || action == RIGHT) {
+                handleOptionsSelect();
+            } else if (keyCode == KEY_SOFT_RIGHT1 || keyCode == KEY_SE_BACK || keyCode == KEY_NUM9) {
+                // Return to caller screen, save settings
+                if (midlet != null) midlet.saveSettings();
+                screenState = optionsReturnScreen;
             }
             return;
         }
@@ -921,11 +1008,14 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             case KEY_NUM1: kStrafeL = true; break;
             case KEY_NUM3: kStrafeR = true; break;
             case KEY_NUM5: kFire = true; break;
-            case KEY_NUM9: showAutomap = !showAutomap; break;
-            case KEY_NUM0: world.triggerJump(); break;
-            case KEY_NUM7: world.manualOpenDoor(); break;
-            case KEY_STAR: world.switchWeapon(-1); break;
-            case KEY_POUND: world.switchWeapon(1); break;
+            case KEY_NUM7: world.switchWeapon(-1); break;
+            case KEY_NUM9: world.switchWeapon(1); break;
+            case KEY_NUM0:
+                if (world.isSectorClear()) world.interactOrNextLevel();
+                else world.triggerJump();
+                break;
+            case KEY_STAR: world.interactOrNextLevel(); break;
+            case KEY_POUND: showAutomap = !showAutomap; break;
             default:
                 if (action == UP) kUp = true;
                 else if (action == DOWN) kDown = true;
@@ -970,7 +1060,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 world.resetInventory();
                 world.loadLevel(selectedStartLevel);
                 screenState = SCREEN_BRIEFING;
-                if (sound != null) sound.playMusic(GameWorld.musicTrackFor(selectedStartLevel));
+                if (sound != null) sound.playMusic(selectedStartLevel + 1);
                 break;
             case 1:
                 selectedStartLevel = (selectedStartLevel + 1) % GameWorld.NUM_LEVELS;
@@ -978,23 +1068,41 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 if (midlet != null) midlet.saveSettings();
                 break;
             case 2:
+                optionsReturnScreen = SCREEN_MAIN_MENU;
+                optionsCursor = 0;
+                screenState = SCREEN_OPTIONS;
+                break;
+            case 3:
+                screenState = SCREEN_CONTROLS;
+                break;
+            case 4:
+                if (midlet != null) midlet.exitGame();
+                break;
+        }
+    }
+
+    private void handleOptionsSelect() {
+        switch (optionsCursor) {
+            case 0:
                 world.polyRenderer.cycleShadingMode();
                 if (midlet != null) midlet.saveSettings();
                 break;
-            case 3:
+            case 1:
                 if (sound != null) {
-                    sound.musicEnabled = !sound.musicEnabled;
-                    sound.sfxEnabled = sound.musicEnabled;
-                    if (sound.musicEnabled) sound.playMusic(0);
-                    else sound.stopMusic();
+                    sound.setMusicEnabled(!sound.musicEnabled);
+                    if (midlet != null) midlet.saveSettings();
                 }
+                break;
+            case 2:
+                if (sound != null) {
+                    sound.sfxEnabled = !sound.sfxEnabled;
+                    if (midlet != null) midlet.saveSettings();
+                }
+                break;
+            case 3:
+                world.enemyBehavior = (world.enemyBehavior == GameWorld.ENEMY_SIMPLE)
+                        ? GameWorld.ENEMY_AGGRESSIVE : GameWorld.ENEMY_SIMPLE;
                 if (midlet != null) midlet.saveSettings();
-                break;
-            case 4:
-                screenState = SCREEN_CONTROLS;
-                break;
-            case 5:
-                if (midlet != null) midlet.exitGame();
                 break;
         }
     }
@@ -1005,35 +1113,23 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 screenState = SCREEN_PLAYING;
                 break;
             case 1:
-                world.polyRenderer.cycleShadingMode();
+                optionsReturnScreen = SCREEN_PAUSED;
+                optionsCursor = 0;
+                screenState = SCREEN_OPTIONS;
                 break;
             case 2:
                 // Developer mode: god mode + debug overlay. Stay in the menu so the state is visible.
                 world.devMode = !world.devMode;
                 break;
             case 3:
-                // Music on/off. Stay in the menu; the choice is saved in the record store.
-                if (sound != null) {
-                    sound.setMusicEnabled(!sound.musicEnabled);
-                    if (midlet != null) midlet.saveSettings();
-                }
-                break;
-            case 4:
-                // Sound effects on/off (independent of music).
-                if (sound != null) {
-                    sound.sfxEnabled = !sound.sfxEnabled;
-                    if (midlet != null) midlet.saveSettings();
-                }
-                break;
-            case 5:
                 world.levelCompleted = true;
                 screenState = SCREEN_PLAYING;
                 break;
-            case 6:
+            case 4:
                 screenState = SCREEN_MAIN_MENU;
                 if (sound != null) sound.playMusic(0);
                 break;
-            case 7:
+            case 5:
                 if (midlet != null) midlet.exitGame();
                 break;
         }

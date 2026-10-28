@@ -1,9 +1,7 @@
 package chasm;
 
 import java.io.DataInputStream;
-import java.io.EOFException;
 import java.io.InputStream;
-import java.util.Vector;
 
 /**
  * Chasm: The Rift GameWorld built on CovertOps3D-RE's C3D2/C3B BSP-Portal Engine
@@ -38,35 +36,14 @@ public final class GameWorld {
     private final Point2D collisionTestPoint = new Point2D(0, 0);
 
     // ==================== Chasm Gameplay Constants ====================
-    // Levels 1-3: MAP.01, MAP.05, MAP.06 of the CSM.BIN used by this build (MAP.99 is the briefing
-    // background, not a mission). Level 4: the first build's "Pyramid of Shmuher" (grid map 3 in
-    // tools/legacy, with the steps and walls added by hand there). It is not game data.
-    public static final int NUM_LEVELS = 4;
-    /** Full level names (level index 0..3). The menu adds the number: "4 PYRAMID OF SHMUHER". */
+    // Playable levels with data present in the CSM.BIN used by this build.
+    // MAP.99 is the briefing background, not a playable mission, so it is not included.
+    public static final int NUM_LEVELS = 3;
     public static final String[] LEVEL_NAMES = {
         "THE POWER STATION",
         "AROUND PYRAMIDS",
-        "PYRAMID OF SHMUHER",
-        "SHMUHER (FIRST BUILD)"
+        "PYRAMID OF SHMUHER"
     };
-    /** Short names for places where the full name does not fit a 240-pixel menu line. */
-    public static final String[] LEVEL_SHORT_NAMES = {
-        "POWER STATION",
-        "PYRAMIDS",
-        "SHMUHER",
-        "SHMUHER 1ST BUILD"
-    };
-
-    /** Level label with its number, e.g. "4 SHMUHER (FIRST BUILD)" (number = level index + 1). */
-    public static String levelLabel(int levelIndex, boolean shortName) {
-        String name = shortName ? LEVEL_SHORT_NAMES[levelIndex] : LEVEL_NAMES[levelIndex];
-        return (levelIndex + 1) + " " + name;
-    }
-
-    /** Music track (SoundManager: 1..4 = mus_lvl1..4) for a 0-based level index. */
-    public static int musicTrackFor(int levelIndex) {
-        return (levelIndex % 4) + 1;
-    }
 
     public static final String[][] LEVEL_BRIEFINGS = {
         {
@@ -86,12 +63,6 @@ public final class GameWorld {
             "Deep inside the pyramid the",
             "distortion is strongest. Clear",
             "the chambers and move on."
-        },
-        {
-            "MISSION 4: SHMUHER (1ST BUILD)",
-            "First-build layout of the pyramid",
-            "with hand-made steps and walls",
-            "(not game data). Reach the exit."
         }
     };
 
@@ -110,14 +81,21 @@ public final class GameWorld {
     public static final int STATE_PAIN   = MSTATE_PAIN;
     public static final int STATE_DEAD   = MSTATE_DEAD;
 
+    // Order matches model slots 0..10 in models.bin (verified vs https://chasmtherift.fandom.com/wiki/Category:Enemies)
+    // Matches monster order in models.bin (MONGF, WMAN, SPIDER, TT_TOWER, FAUST1, DEADMAN1, PANT1, JOKER6, SCELET3, LION4, VIKING4)
     public static final String[] MONSTER_NAMES = {
-        "GRUNT", "SKELETON", "GOBLIN", "SCORPION", "ZOMBIE", "RAT",
-        "PHANTOM", "ORC", "MUMMY", "OGRE", "DEMON"
+        "MONG", "STRATOS", "SCORPION", "TURRET", "FAUST", "ZOMBIE",
+        "PUNISHER", "JOKER", "SKELETON", "LIONMAN", "VIKING"
     };
 
     public static final int[] MONSTER_MAX_HP = {
-        70, 85, 65, 95, 90, 45, 80, 100, 120, 145, 180
+        70, 85, 95, 65, 90, 45, 80, 100, 120, 145, 180
     };
+
+    public static final int ENEMY_SIMPLE = 0;
+    public static final int ENEMY_AGGRESSIVE = 1;
+    public int enemyBehavior = ENEMY_SIMPLE; // 0 = default 380, 1 = aggressive ~1.6x visibility
+    public static final String[] ENEMY_BEHAVIOR_NAMES = { "SIMPLE", "AGGRESSIVE" };
 
     public static final String[] WEAPON_NAMES = {
         "1:RIFT RIFLE",
@@ -129,6 +107,29 @@ public final class GameWorld {
     };
 
     public static final int[] WEAPON_MODEL_IDS = { 11, 12, 13, 14, 15, 16 };
+
+    // Открытый текст: переопределяет хардкод если есть res/open/texts/strings.txt
+    static {
+        try {
+            TextTable.ensureLoaded();
+            for (int i = 0; i < LEVEL_NAMES.length; i++) {
+                String v = TextTable.get("LEVEL_" + (i+1) + "_NAME", null);
+                if (v != null) LEVEL_NAMES[i] = v;
+                for (int k = 0; k < 4; k++) {
+                    String bk = TextTable.get("LEVEL_" + (i+1) + "_BRIEF_" + (k+1), null);
+                    if (bk != null) LEVEL_BRIEFINGS[i][k] = bk;
+                }
+            }
+            for (int i = 0; i < MONSTER_NAMES.length; i++) {
+                String v = TextTable.get("MONSTER_" + i, null);
+                if (v != null) MONSTER_NAMES[i] = v;
+            }
+            for (int i = 0; i < WEAPON_NAMES.length; i++) {
+                String v = TextTable.get("WEAPON_" + i, null);
+                if (v != null) WEAPON_NAMES[i] = v;
+            }
+        } catch (Throwable t) {}
+    }
     public static final int[] WEAPON_COOLDOWN  = { 5, 11, 3, 9, 8, 14 };
     public static final int[] WEAPON_DAMAGE    = { 24, 52, 18, 42, 48, 85 };
     public static final int[] WEAPON_AMMO_COST = { 1, 2, 1, 1, 1, 2 };
@@ -226,31 +227,19 @@ public final class GameWorld {
     public final int[] propHalfZ       = new int[MAX_PROPS];
 
     // ==================== Explosive barrels (prop model 30, BAREL1.3O) ====================
-    /** Prop model id of the explosive barrel. */
     public static final int BARREL_MODEL = 30;
-    /** Barrel hit points: two Rift Rifle hits, three Volcano Chaingun hits, or one Double Shotgun blast. */
     public static final int BARREL_HP = 40;
-    /** Blast damage at the barrel centre; it falls off linearly to 0 at BARREL_BLAST_RADIUS. */
     public static final int BARREL_BLAST_DAMAGE = 90;
-    /** Blast radius in world units (two 96-unit cells). */
     public static final int BARREL_BLAST_RADIUS = 192;
-    /** Remaining hit points per prop (used by barrels only). */
     private final int[] propHP = new int[MAX_PROPS];
-    /** Barrels queued for detonation during one chain reaction. */
     private final int[] blastQueue = new int[MAX_PROPS];
-
-    /** Fireballs drawn at detonation points. Each lives BLAST_FX_LIFE ticks. */
     public static final int MAX_BLAST_FX = 3;
     public static final int BLAST_FX_LIFE = 10;
-    /** Ticks of whole-screen flash when the player is inside a blast. */
     public static final int BLAST_FLASH_TICKS = 4;
-    /** World position (16.16) of each fireball: floor + barrel centre height. */
     private final int[] blastFxX = new int[MAX_BLAST_FX];
     private final int[] blastFxY = new int[MAX_BLAST_FX];
     private final int[] blastFxZ = new int[MAX_BLAST_FX];
-    /** Ticks left for each fireball; 0 = slot free. */
     private final int[] blastFxLeft = new int[MAX_BLAST_FX];
-    /** Whole-screen flash ticks left (player inside a blast). */
     public int blastFlashTimer = 0;
     private final int[] blastScreen = new int[2];
 
@@ -417,817 +406,6 @@ public final class GameWorld {
         }
     }
 
-    // ==================== Doors, Gates, Switches & Keys (PROCESS.XX) ====================
-    // Nothing needs a use key: a proc is activated by touch. Activation follows the original engine
-    // (Chasm-Reverse map.cpp, ProcedureProcess*): it runs only when the proc is unlocked, or when the
-    // key it needs is held. 'Lock' is removed by an 'unlock' action from another proc.
-    public static final int MAX_PROCS = 40;
-    public static final int TRIG_LINK = 0;       // proximity (3x3 cells)
-    public static final int TRIG_FLOOR = 1;      // stepped on (the cell itself)
-    public static final int TRIG_RETURN = 2;     // resets the proc to its start state
-    public static final int TRIG_ONOFF = 3;      // proximity; a second touch closes it
-    public static final int TRIG_DESTROY = 4;    // a shot destroys the gate lock on its cell (no proximity)
-    /** Gate lock prop (models.bin id 38): shot to open. */
-    public static final int LOCK_MODEL = 38;
-    public static final int LOCK_HP = 60;
-    /**
-     * Squared radius (world units, 24 units = 0.25 cell) within which the player touches a floor
-     * trigger's cell. The original uses the player radius (60/256 cell) against the cell square, so
-     * a floor cell in a closed door is touched when the player bumps the door from outside.
-     */
-    private static final int FLOOR_TOUCH_R2 = 24 * 24;
-    private static final int PROC_LOCKED = 1;
-    private static final int PROC_CHECKBACK = 2;
-    private static final int PROC_TOGGLE = 4;
-    private static final int DSTATE_IDLE = 0;
-    private static final int DSTATE_DELAY = 1;
-    private static final int DSTATE_OPENING = 2;
-    private static final int DSTATE_OPEN = 3;
-    private static final int DSTATE_CLOSING = 4;
-    private static final int STAGE_ONE = 256;
-    /** Original engine ran about this many game ticks per second (ChasmCanvas ~28 FPS). */
-    private static final int TICKS_PER_SECOND = 28;
-    /** Cell size in world units; matches the compiler's SCALE. */
-    private static final int CELL_UNITS = 96;
-    /** Closed door/gate ceiling sits this far above the floor (0: level with it, so it blocks the player). */
-    private static final int DOOR_CLOSED_GAP = 0;
-
-    public int procCount = 0;
-    private final int[] procId = new int[MAX_PROCS];
-    /** True for a proc that moves a 3O platform (its stage drives the platform, see updateMovers). */
-    private final boolean[] procMoves = new boolean[MAX_PROCS];
-    private final int[] procKey = new int[MAX_PROCS];       // 0 none, 1 green, 2 red, 3 blue
-    private final int[] procFlags = new int[MAX_PROCS];
-    private final int[] procDelay = new int[MAX_PROCS];     // ticks before opening
-    private final int[] procBackWait = new int[MAX_PROCS];  // ticks open before returning; 0 = never
-    private final int[] procSpeed = new int[MAX_PROCS];
-    private final int[] procOnMsg = new int[MAX_PROCS];
-    private final int[] procLockMsg = new int[MAX_PROCS];
-    private final int[] procState = new int[MAX_PROCS];
-    private final int[] procTimer = new int[MAX_PROCS];
-    private final int[] procStage = new int[MAX_PROCS];     // 0 closed .. STAGE_ONE open
-    private final int[][] procTrig = new int[MAX_PROCS][];     // kind, x, y triples
-    private final boolean[][] procTrigIn = new boolean[MAX_PROCS][];
-    private final int[][] procUnlock = new int[MAX_PROCS][];
-    private final int[][] procCell = new int[MAX_PROCS][];     // x, y, sectorId, openCeil quads
-    private final String[] procMsg = new String[256];
-
-    // Moving platforms: 3O models whose prop box follows the stage of their proc (PROCESS 'move').
-    // A mover occupies a prop slot after the static props; propMovProc is -1 for static props.
-    private final int[] propMovProc = new int[MAX_PROPS];
-    private final int[] propBaseX = new int[MAX_PROPS];     // world units, stage 0
-    private final int[] propBaseZ = new int[MAX_PROPS];
-    private final int[] propMoveDX = new int[MAX_PROPS];    // world units, total travel at stage 256
-    private final int[] propMoveDZ = new int[MAX_PROPS];
-    private int movCount = 0;
-    private final int[] movPid = new int[MAX_PROPS];
-    private final int[] movModel = new int[MAX_PROPS];
-    private final int[] movBX = new int[MAX_PROPS];
-    private final int[] movBZ = new int[MAX_PROPS];
-    private final int[] movDX = new int[MAX_PROPS];
-    private final int[] movDZ = new int[MAX_PROPS];
-    private final int[] movHX = new int[MAX_PROPS];
-    private final int[] movHZ = new int[MAX_PROPS];
-    private final int[] movAng = new int[MAX_PROPS];
-    public boolean hasGreenKey = false;
-    public boolean hasRedKey = false;
-    public boolean hasBlueKey = false;
-    /** Level exit point in world units (16.16 is applied when used). */
-    private int exitX = 0;
-    private int exitZ = 0;
-
-    private void loadProcsSidecar(String path) {
-        procCount = 0;
-        movCount = 0;
-        for (int i = 0; i < procMsg.length; i++) procMsg[i] = null;
-        for (int i = 0; i < MAX_PROCS; i++) procMoves[i] = false;
-        panelCount = 0;
-        try {
-            InputStream is = GameWorld.class.getResourceAsStream(path);
-            if (is == null) return;
-            DataInputStream dis = new DataInputStream(is);
-            int n = dis.readUnsignedShort();
-            for (int i = 0; i < n; i++) {
-                int pid = dis.readUnsignedByte();
-                int key = dis.readUnsignedByte();
-                int flags = dis.readUnsignedByte();
-                int delay = dis.readUnsignedShort();
-                int back = dis.readUnsignedShort();
-                int speed = dis.readUnsignedByte();
-                int onMsg = dis.readUnsignedByte();
-                int lockMsg = dis.readUnsignedByte();
-                int tc = dis.readUnsignedByte();
-                int[] trig = new int[tc * 3];
-                for (int t = 0; t < trig.length; t++) trig[t] = dis.readUnsignedByte();
-                int uc = dis.readUnsignedByte();
-                int[] unl = new int[uc];
-                for (int u = 0; u < uc; u++) unl[u] = dis.readUnsignedByte();
-                int cc = dis.readUnsignedByte();
-                int[] cells = new int[cc * 4];
-                for (int c = 0; c < cc; c++) {
-                    cells[c * 4] = dis.readUnsignedByte();
-                    cells[c * 4 + 1] = dis.readUnsignedByte();
-                    cells[c * 4 + 2] = dis.readUnsignedShort();
-                    cells[c * 4 + 3] = dis.readUnsignedShort();
-                }
-                if (procCount >= MAX_PROCS) continue;
-                int k = procCount++;
-                procId[k] = pid;
-                procKey[k] = key;
-                procFlags[k] = flags;
-                procDelay[k] = delay * TICKS_PER_SECOND / 10;
-                procBackWait[k] = back * TICKS_PER_SECOND / 10;
-                procSpeed[k] = speed;
-                procOnMsg[k] = onMsg;
-                procLockMsg[k] = lockMsg;
-                procState[k] = DSTATE_IDLE;
-                procTimer[k] = 0;
-                procStage[k] = 0;
-                procTrig[k] = trig;
-                procTrigIn[k] = new boolean[tc];
-                procUnlock[k] = unl;
-                procCell[k] = cells;
-            }
-            int mc = dis.readUnsignedByte();
-            for (int m = 0; m < mc; m++) {
-                int id = dis.readUnsignedByte();
-                int len = dis.readUnsignedByte();
-                byte[] text = new byte[len];
-                dis.readFully(text);
-                if (id > 0) procMsg[id] = new String(text, "US-ASCII");
-            }
-            int vc = dis.readUnsignedByte();
-            for (int v = 0; v < vc; v++) {
-                int pid = dis.readUnsignedByte();
-                int model = dis.readUnsignedByte();
-                int bx = dis.readShort();
-                int bz = dis.readShort();
-                int ddx = dis.readShort();
-                int ddz = dis.readShort();
-                int hx = dis.readShort();
-                int hz = dis.readShort();
-                int ang = dis.readUnsignedByte();
-                if (movCount >= MAX_PROPS) continue;
-                int k = movCount++;
-                movPid[k] = pid;
-                movModel[k] = model;
-                movBX[k] = bx;
-                movBZ[k] = bz;
-                movDX[k] = ddx;
-                movDZ[k] = ddz;
-                movHX[k] = hx;
-                movHZ[k] = hz;
-                movAng[k] = ang;
-            }
-            // Panels (door panels and rotating walls). Older sidecars end after the movers.
-            int pc = 0;
-            try {
-                pc = dis.readUnsignedShort();
-            } catch (EOFException e) {
-                pc = 0;
-            }
-            for (int q = 0; q < pc; q++) {
-                int kind = dis.readUnsignedByte();
-                int pid = dis.readUnsignedByte();
-                int slot = dis.readUnsignedByte();
-                int[] raw = new int[7];
-                for (int j = 0; j < 7; j++) raw[j] = dis.readShort();
-                if (panelCount >= MAX_PANELS) continue;
-                int k = panelCount++;
-                panelKind[k] = kind;
-                panelPid[k] = pid;
-                panelSlot[k] = slot;
-                for (int j = 0; j < 7; j++) panelRaw[k * 7 + j] = raw[j];
-            }
-            dis.close();
-        } catch (Exception e) {
-            procCount = 0;
-        }
-    }
-
-    /** Cell index of a 16.16 world coordinate (cells are indexed from 32 at the origin). */
-    private static int cellOf(int fp) {
-        int u = fp >> 16;
-        int q = u / CELL_UNITS;
-        if (u < 0 && q * CELL_UNITS != u) q--;
-        return q + 32;
-    }
-
-    private static boolean cellNear(int x, int y, int cx, int cz) {
-        return Math.abs(x - cx) <= 1 && Math.abs(y - cz) <= 1;
-    }
-
-    /** True if the player's circle (16.16 world position) touches the square of cell (x, y). */
-    private static boolean touchesCell(int fx, int fz, int x, int y) {
-        int px = fx >> 16;
-        int pz = fz >> 16;
-        int x0 = (x - 32) * CELL_UNITS;
-        int z0 = (y - 32) * CELL_UNITS;
-        int dx = px < x0 ? x0 - px : (px > x0 + CELL_UNITS ? px - x0 - CELL_UNITS : 0);
-        int dz = pz < z0 ? z0 - pz : (pz > z0 + CELL_UNITS ? pz - z0 - CELL_UNITS : 0);
-        return dx * dx + dz * dz <= FLOOR_TOUCH_R2;
-    }
-
-    private int procIndex(int pid) {
-        for (int p = 0; p < procCount; p++) {
-            if (procId[p] == pid) return p;
-        }
-        return -1;
-    }
-
-    /**
-     * Door cells for the automap, as triples (cell x, cell y, key id). Key id 0 = no key (a door
-     * that only an 'unlock' opens); 1 green, 2 red, 3 blue. Moving platforms are not doors.
-     */
-    public int[] automapDoorCells() {
-        int n = 0;
-        for (int p = 0; p < procCount; p++) {
-            if (procMoves[p]) continue;
-            n += procCell[p].length / 4;
-        }
-        int[] out = new int[n * 3];
-        int j = 0;
-        for (int p = 0; p < procCount; p++) {
-            if (procMoves[p]) continue;
-            int[] cells = procCell[p];
-            for (int c = 0; c < cells.length; c += 4) {
-                out[j++] = cells[c];
-                out[j++] = cells[c + 1];
-                out[j++] = procKey[p];
-            }
-        }
-        return out;
-    }
-
-    private boolean hasKey(int k) {
-        if (k == 1) return hasGreenKey;
-        if (k == 2) return hasRedKey;
-        if (k == 3) return hasBlueKey;
-        return false;
-    }
-
-    /** The engine's test: a keyed proc needs its key; an unkeyed proc needs to be unlocked. */
-    private boolean canOpen(int p) {
-        if (procKey[p] == 0) return (procFlags[p] & PROC_LOCKED) == 0;
-        return hasKey(procKey[p]);
-    }
-
-    private boolean playerInProcCells(int p, int cx, int cz) {
-        int[] cells = procCell[p];
-        for (int c = 0; c < cells.length; c += 4) {
-            if (cells[c] == cx && cells[c + 1] == cz) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Handles one touch. Returns false when the proc refused (locked, no key), so the caller
-     * keeps checking while the player stays in range (a key picked up nearby then opens it).
-     */
-    private boolean triggerProc(int p, int kind) {
-        int st = procState[p];
-        boolean active = st == DSTATE_DELAY || st == DSTATE_OPENING || st == DSTATE_OPEN;
-        if (kind == TRIG_RETURN) {
-            if (active) procState[p] = DSTATE_CLOSING;
-            return true;
-        }
-        if (kind == TRIG_ONOFF && active && (procFlags[p] & PROC_TOGGLE) != 0) {
-            procState[p] = DSTATE_CLOSING;
-            return true;
-        }
-        if (!canOpen(p)) {
-            int lm = procLockMsg[p];
-            if (lm != 0 && procMsg[lm] != null) {
-                setMessage(procMsg[lm], 40);
-            } else if (procKey[p] != 0) {
-                setMessage(procKey[p] == 1 ? "LOCKED - NEED GREEN KEY"
-                        : (procKey[p] == 2 ? "LOCKED - NEED RED KEY" : "LOCKED - NEED BLUE KEY"), 40);
-            } else {
-                setMessage("LOCKED", 40);   // unkeyed door still locked by an 'unlock' from another proc
-            }
-            return false;
-        }
-        openProc(p);
-        return true;
-    }
-
-    /**
-     * The activation half of a touch: on-message, the 'unlock' actions of this proc, and the start
-     * of its movement. Shared by triggerProc (keys/locks already checked) and destroyProc.
-     */
-    private void openProc(int p) {
-        int st = procState[p];
-        boolean active = st == DSTATE_DELAY || st == DSTATE_OPENING || st == DSTATE_OPEN;
-        int om = procOnMsg[p];
-        if (om != 0 && procMsg[om] != null) setMessage(procMsg[om], 60);
-        int[] unl = procUnlock[p];
-        for (int u = 0; u < unl.length; u++) {
-            int q = procIndex(unl[u]);
-            if (q >= 0) procFlags[q] &= ~PROC_LOCKED;
-        }
-        if (active) {
-            if (st == DSTATE_OPEN && procBackWait[p] > 0) procTimer[p] = procBackWait[p];
-            return;
-        }
-        if (procCell[p].length > 0 || procMoves[p] || procHasRotor[p]) {
-            procState[p] = procDelay[p] > 0 ? DSTATE_DELAY : DSTATE_OPENING;
-            procTimer[p] = procDelay[p];
-        }
-    }
-
-    /**
-     * The original's 'destroy' link (ProcedureProcessDestroy): shooting the 3O on the link's cell
-     * clears the proc's lock and opens it. Keys are not checked.
-     */
-    private void destroyProc(int p) {
-        procFlags[p] &= ~PROC_LOCKED;
-        openProc(p);
-    }
-
-    /**
-     * Manual use (key 7): acts as a touch on the nearest door or switch within one cell. Locks
-     * and keys are checked as usual, so a locked door still refuses with its message.
-     */
-    public void manualOpenDoor() {
-        if (sectors == null) return;
-        int cx = cellOf(playerBody.x);
-        int cz = cellOf(playerBody.z);
-        int best = -1;
-        int bestD = 2;   // one cell: the door, its trigger cell, or a cell next to it
-        for (int p = 0; p < procCount; p++) {
-            if (procMoves[p]) continue;
-            int d = 99;
-            int[] cells = procCell[p];
-            for (int c = 0; c < cells.length; c += 4) d = Math.min(d, cellDistance(cx, cz, cells[c], cells[c + 1]));
-            int[] tr = procTrig[p];
-            for (int t = 0; t < tr.length; t += 3) {
-                if (tr[t] == TRIG_RETURN || tr[t] == TRIG_DESTROY) continue;
-                d = Math.min(d, cellDistance(cx, cz, tr[t + 1], tr[t + 2]));
-            }
-            if (d < bestD) {
-                bestD = d;
-                best = p;
-            }
-        }
-        if (best < 0) {
-            setMessage("NO DOOR NEAR", 40);
-            return;
-        }
-        triggerProc(best, TRIG_LINK);
-    }
-
-    private static int cellDistance(int ax, int az, int bx, int bz) {
-        return Math.max(Math.abs(ax - bx), Math.abs(az - bz));
-    }
-
-    /** Sets the ceilings of a proc's cells for its current stage (closed = floor + gap). */
-    private void applyProc(int p) {
-        int[] cells = procCell[p];
-        for (int c = 0; c < cells.length; c += 4) {
-            int sid = cells[c + 2];
-            if (sectors == null || sid < 0 || sid >= sectors.length) continue;
-            SectorData sd = sectors[sid];
-            int closed = sd.floorHeight + DOOR_CLOSED_GAP;
-            int open = Math.max(closed, cells[c + 3]);
-            sd.ceilingHeight = (short) (closed + (open - closed) * procStage[p] / STAGE_ONE);
-        }
-    }
-
-    private void advanceProc(int p, int cx, int cz) {
-        int st = procState[p];
-        if (st == DSTATE_IDLE) return;
-        boolean blocked = playerInProcCells(p, cx, cz);
-        int step = Math.max(4, Math.min(64, procSpeed[p] * 3));
-        if (procMoves[p]) {
-            // The original: stage = seconds * speed / 10, so a full move takes 10 / speed seconds.
-            step = Math.max(1, procSpeed[p] * STAGE_ONE / (10 * TICKS_PER_SECOND));
-        }
-        switch (st) {
-            case DSTATE_DELAY:
-                if (--procTimer[p] <= 0) procState[p] = DSTATE_OPENING;
-                break;
-            case DSTATE_OPENING:
-                procStage[p] = Math.min(STAGE_ONE, procStage[p] + step);
-                applyProc(p);
-                if (procStage[p] >= STAGE_ONE) {
-                    procState[p] = DSTATE_OPEN;
-                    procTimer[p] = procBackWait[p];
-                }
-                break;
-            case DSTATE_OPEN:
-                if (procBackWait[p] > 0 && --procTimer[p] <= 0) {
-                    // Never close on the player: wait until the cells are clear.
-                    if (blocked) procTimer[p] = 1;
-                    else procState[p] = DSTATE_CLOSING;
-                }
-                break;
-            case DSTATE_CLOSING:
-                if (blocked) {
-                    procState[p] = DSTATE_OPEN;
-                    procTimer[p] = 1;
-                    break;
-                }
-                procStage[p] = Math.max(0, procStage[p] - step);
-                applyProc(p);
-                if (procStage[p] == 0) procState[p] = DSTATE_IDLE;
-                break;
-            default:
-                break;
-        }
-    }
-
-    /** Runs once per game tick: touch triggers, then the movement of every proc. */
-    private void updateProcs() {
-        if (sectors == null) return;
-        int cx = cellOf(playerBody.x);
-        int cz = cellOf(playerBody.z);
-        for (int p = 0; p < procCount; p++) {
-            int[] tr = procTrig[p];
-            boolean[] in = procTrigIn[p];
-            for (int t = 0; t < in.length; t++) {
-                int kind = tr[t * 3];
-                int x = tr[t * 3 + 1];
-                int y = tr[t * 3 + 2];
-                if (kind == TRIG_DESTROY) continue;   // fired by a shot (destroyLocksAt)
-                boolean inside = kind == TRIG_FLOOR ? touchesCell(playerBody.x, playerBody.z, x, y)
-                        : cellNear(x, y, cx, cz);
-                if (!inside) {
-                    in[t] = false;
-                } else if (!in[t]) {
-                    // Remember the touch only when the proc accepted it; a refused touch is retried
-                    // on the next tick while the player stays in range.
-                    in[t] = triggerProc(p, kind);
-                }
-            }
-        }
-        for (int p = 0; p < procCount; p++) advanceProc(p, cx, cz);
-        updateMovers();
-        updatePanels();
-    }
-
-    /**
-     * Moves each mover's prop box to its proc's stage. Entities that the box reaches are shoved
-     * to its leading face (the original's GetFloorLevel ignores dynamic models, so nothing rides
-     * the platform; the box only blocks and pushes).
-     */
-    private void updateMovers() {
-        for (int i = 0; i < propCount; i++) {
-            int p = propMovProc[i];
-            if (!propActive[i] || p < 0) continue;
-            int stage = procStage[p];
-            int nx = (propBaseX[i] + propMoveDX[i] * stage / STAGE_ONE) << 16;
-            int nz = (propBaseZ[i] + propMoveDZ[i] * stage / STAGE_ONE) << 16;
-            if (nx == propX[i] && nz == propZ[i]) continue;
-            int frameDX = nx - propX[i];
-            int frameDZ = nz - propZ[i];
-            propX[i] = nx;
-            propZ[i] = nz;
-            propSector[i] = getSectorAtPoint(nx, nz);
-            shoveFromMover(i, frameDX, frameDZ);
-        }
-    }
-
-    /** Pushes the player and live monsters inside mover box i to its leading face. */
-    private void shoveFromMover(int i, int frameDX, int frameDZ) {
-        int hx = propHalfX[i] + CollisionSystem.COLLISION_RADIUS;
-        int hz = propHalfZ[i] + CollisionSystem.COLLISION_RADIUS;
-        int sx = frameDX > 0 ? 1 : (frameDX < 0 ? -1 : 0);
-        int sz = frameDZ > 0 ? 1 : (frameDZ < 0 ? -1 : 0);
-        int px = propX[i];
-        int pz = propZ[i];
-
-        int ox = playerBody.x - px;
-        int oz = playerBody.z - pz;
-        if (ox > -hx && ox < hx && oz > -hz && oz < hz) {
-            int tx = sx != 0 ? px + sx * hx : playerBody.x;
-            int tz = sx != 0 ? playerBody.z : pz + sz * hz;
-            // Never shove the player into a wall: a blocked shove leaves the box pushout to act.
-            if (getSectorAtPoint(tx, tz) != null) {
-                playerBody.x = tx;
-                playerBody.z = tz;
-            }
-        }
-        for (int m = 0; m < monCount; m++) {
-            if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
-            int mx = monX[m] - px;
-            int mz = monZ[m] - pz;
-            if (mx > -hx && mx < hx && mz > -hz && mz < hz) {
-                if (sx != 0) monX[m] = px + sx * hx;
-                else monZ[m] = pz + sz * hz;
-                monSector[m] = getSectorAtPoint(monX[m], monZ[m]);
-            }
-        }
-    }
-
-    /** Adds the level's movers as prop slots after the static props (after both sidecars load). */
-    private void attachMovers() {
-        for (int k = 0; k < movCount; k++) {
-            int i = propCount;
-            if (i >= MAX_PROPS) break;
-            propCount++;
-            propHP[i] = BARREL_HP;
-            propActive[i] = true;
-            propModelId[i] = movModel[k];
-            propHalfX[i] = movHX[k] << 16;
-            propHalfZ[i] = movHZ[k] << 16;
-            propAngle[i] = MathUtils.fromAngle4096((movAng[k] & 7) << 9);
-            propBaseX[i] = movBX[k];
-            propBaseZ[i] = movBZ[k];
-            propMoveDX[i] = movDX[k];
-            propMoveDZ[i] = movDZ[k];
-            propMovProc[i] = procIndex(movPid[k]);
-            if (propMovProc[i] >= 0) procMoves[propMovProc[i]] = true;
-            propX[i] = movBX[k] << 16;
-            propZ[i] = movBZ[k] << 16;
-            propSector[i] = getSectorAtPoint(propX[i], propZ[i]);
-        }
-    }
-
-    /** The level ends when every enemy is down and the player reaches the exit point. */
-    // ==================== Panels: door panels and rotating walls ====================
-    // The thin walls inside a door's cells and inside a rotating proc's cells are not part of the
-    // baked geometry (only cell edges are). At load each becomes a solid textured wall in the sector
-    // on each side of it (both faces), with its own vertices, so it blocks, shows its texture and
-    // is cut by the portal clipping like any other wall. A door panel is solid only while its proc
-    // is closed (stage 0); the portal walls between the door and its neighbours are hidden then, so
-    // the panel is the door's face. A rotating panel turns about its pivot with the proc stage.
-    private static final int MAX_PANELS = 400;
-    private static final int PANEL_KIND_DOOR = 0;
-    private static final int PANEL_KIND_ROTATE = 1;
-    /** Sample distance past each side of a panel, to find the sector it stands in (0.75 cell). */
-    private static final int PANEL_SIDE_UNITS = 72;
-    /** World units per panel coordinate step: the sidecar stores (cell - 32) * 256. */
-    private static final int PANEL_RAW_UNITS = CELL_UNITS << 16;
-
-    private int panelCount = 0;
-    private final int[] panelKind = new int[MAX_PANELS];
-    private final int[] panelPid = new int[MAX_PANELS];
-    private final int[] panelSlot = new int[MAX_PANELS];
-    /** Per panel: x0, y0, x1, y1, pivot x, pivot y, angle in degrees (raw sidecar values). */
-    private final int[] panelRaw = new int[MAX_PANELS * 7];
-    private final int[] panelProc = new int[MAX_PANELS];     // index into procs, -1 none
-    private final int[] panelV0 = new int[MAX_PANELS];       // vertex indices
-    private final int[] panelV1 = new int[MAX_PANELS];
-    private final int[] panelLastStage = new int[MAX_PANELS];
-    private final boolean[] panelClosed = new boolean[MAX_PANELS];
-    private final WallDefinition[] panelCollide = new WallDefinition[MAX_PANELS];
-    /** Every WallDefinition of a panel: its collision definition and one per side it is seen from. */
-    private final Vector[] panelDefs = new Vector[MAX_PANELS];
-    /** Per proc: the solid walls on a door's sides (hidden while closed; they still block). */
-    private final Vector[] procHideWalls = new Vector[MAX_PROCS];
-    /** Per proc: the surfaces of its portal walls (their texture becomes the door panel's while closed). */
-    private final Vector[] procFaces = new Vector[MAX_PROCS];
-    /** Per proc: the original (upper, main, lower) texture ids of procFaces, three ints per surface. */
-    private final Vector[] procFaceSaved = new Vector[MAX_PROCS];
-    private final boolean[] procFaceShowsDoor = new boolean[MAX_PROCS];
-    private final int[] procDoorSlot = new int[MAX_PROCS];
-    /** True for a proc that turns a rotating panel: it opens on a touch like a door. */
-    private final boolean[] procHasRotor = new boolean[MAX_PROCS];
-
-    /** Raw sidecar value -> 16.16 world coordinate. */
-    private static int panelToFixed(int raw) {
-        return raw * (PANEL_RAW_UNITS >> 8);
-    }
-
-    private void attachPanels() {
-        for (int p = 0; p < MAX_PROCS; p++) procHasRotor[p] = false;
-        if (panelCount == 0 || vertices == null || wallDefinitions == null || sectors == null) return;
-        int oldV = vertices.length;
-        int oldW = wallDefinitions.length;
-        Point2D[] nv = new Point2D[oldV + 2 * panelCount];
-        System.arraycopy(vertices, 0, nv, 0, oldV);
-        for (int i = 0; i < panelCount; i++) {
-            panelV0[i] = oldV + 2 * i;
-            panelV1[i] = oldV + 2 * i + 1;
-            nv[panelV0[i]] = new Point2D(0, 0);
-            nv[panelV1[i]] = new Point2D(0, 0);
-        }
-        setVertices(nv);
-
-        WallDefinition[] nw = new WallDefinition[oldW + panelCount];
-        System.arraycopy(wallDefinitions, 0, nw, 0, oldW);
-        for (int i = 0; i < panelCount; i++) {
-            int pid = panelPid[i];
-            panelProc[i] = procIndex(pid);
-            panelLastStage[i] = -1;
-            panelClosed[i] = false;
-            placePanel(i, 0);
-
-            WallDefinition coll = new WallDefinition((short) panelV0[i], (short) panelV1[i],
-                    (short) 0, (short) -1, (byte) 0, (byte) 0, (byte) 0);
-            Vector defs = new Vector();
-            defs.addElement(coll);
-            panelCollide[i] = coll;
-            panelDefs[i] = defs;
-            nw[oldW + i] = coll;
-
-            // Mid point and unit normal of the panel, in 16.16 world units.
-            Point2D a = vertices[panelV0[i]];
-            Point2D b = vertices[panelV1[i]];
-            long mx = ((long) a.x + b.x) >> 1;
-            long mz = ((long) a.y + b.y) >> 1;
-            int dx = b.x - a.x;
-            int dz = b.y - a.y;
-            int len = MathUtils.preciseHypot(dx, dz);
-            if (len == 0) continue;
-            int nx = MathUtils.fixedPointDivide(-dz, len);
-            int nz = MathUtils.fixedPointDivide(dx, len);
-            Sector[] leaves = new Sector[2];
-            int leafCount = 0;
-            for (int side = -1; side <= 1; side += 2) {
-                int sx = (int) (mx + side * (long) ((long) nx * PANEL_SIDE_UNITS));
-                int sz = (int) (mz + side * (long) ((long) nz * PANEL_SIDE_UNITS));
-                Sector leaf = getSectorAtPoint(sx, sz);
-                if (leaf == null) continue;
-                SectorData sd = leaf.getSectorData();
-                if (sd == null || sd.ceilingHeight - sd.floorHeight <= 0) continue;
-                boolean seen = false;
-                for (int k = 0; k < leafCount; k++) seen |= leaves[k] == leaf;
-                if (seen) continue;
-                leaves[leafCount++] = leaf;
-
-                WallSurface surf = new WallSurface((byte) panelSlot[i], (byte) panelSlot[i], (byte) panelSlot[i],
-                        0, (short) 0, (short) 0);
-                surf.linkedSector = sd;
-                WallDefinition rd = new WallDefinition((short) panelV0[i], (short) panelV1[i],
-                        (short) 0, (short) -1, (byte) 0, (byte) 0, (byte) 0);
-                rd.frontSurface = surf;
-                rd.backSurface = null;
-                defs.addElement(rd);
-                if (coll.frontSurface == null) coll.frontSurface = surf;
-                WallSegment sa = new WallSegment((short) panelV0[i], (short) panelV1[i], (short) 0, true, (short) 0);
-                WallSegment sb = new WallSegment((short) panelV1[i], (short) panelV0[i], (short) 0, true, (short) 0);
-                sa.wallDefinition = rd;
-                sb.wallDefinition = rd;
-                WallSegment[] old = leaf.walls;
-                WallSegment[] grown = new WallSegment[old.length + 2];
-                System.arraycopy(old, 0, grown, 0, old.length);
-                grown[old.length] = sa;
-                grown[old.length + 1] = sb;
-                leaf.walls = grown;
-            }
-        }
-        wallDefinitions = nw;
-
-        for (int i = 0; i < panelCount; i++) {
-            if (panelKind[i] == PANEL_KIND_ROTATE && panelProc[i] >= 0) procHasRotor[panelProc[i]] = true;
-        }
-
-        // Door faces. While a door is closed its face is its panel texture: the portal walls on its
-        // sides keep drawing (they close the view through the zero-height door), with the panel's
-        // texture; the solid walls on its sides are hidden (they still block).
-        for (int p = 0; p < procCount; p++) {
-            procHideWalls[p] = null;
-            procFaces[p] = null;
-            procFaceSaved[p] = null;
-            procFaceShowsDoor[p] = false;
-            procDoorSlot[p] = -1;
-            int[] cells = procCell[p];
-            for (int i = 0; i < panelCount; i++) {
-                if (panelKind[i] == PANEL_KIND_DOOR && panelProc[i] == p) {
-                    procDoorSlot[p] = panelSlot[i];
-                    break;
-                }
-            }
-            if (procDoorSlot[p] < 0) continue;
-            Vector hide = new Vector();
-            Vector faces = new Vector();
-            Vector saved = new Vector();
-            for (int w = 0; w < oldW; w++) {
-                WallDefinition wd = wallDefinitions[w];
-                if (wd.frontSurface == null) continue;
-                for (int c = 0; c < cells.length; c += 4) {
-                    int sid = cells[c + 2];
-                    if (sid < 0 || sid >= sectors.length) continue;
-                    SectorData door = sectors[sid];
-                    if (wd.frontSurface.linkedSector == door
-                            || (wd.backSurface != null && wd.backSurface.linkedSector == door)) {
-                        if (wd.backSurface == null) {
-                            hide.addElement(wd);
-                        } else {
-                            addFace(faces, saved, wd.frontSurface);
-                            addFace(faces, saved, wd.backSurface);
-                        }
-                        break;
-                    }
-                }
-            }
-            procHideWalls[p] = hide;
-            procFaces[p] = faces;
-            procFaceSaved[p] = saved;
-        }
-        updatePanels();
-    }
-
-    private static void addFace(Vector faces, Vector saved, WallSurface surf) {
-        faces.addElement(surf);
-        saved.addElement(new int[] {surf.upperTextureId, surf.mainTextureId, surf.lowerTextureId});
-    }
-
-    /**
-     * Sets the vertices of panel i for a proc stage (0..STAGE_ONE) and the normal of its collision
-     * definition. A door panel keeps its stage-0 position.
-     */
-    private void placePanel(int i, int stage) {
-        int r = i * 7;
-        int x0 = panelToFixed(panelRaw[r]);
-        int z0 = panelToFixed(panelRaw[r + 1]);
-        int x1 = panelToFixed(panelRaw[r + 2]);
-        int z1 = panelToFixed(panelRaw[r + 3]);
-        if (panelKind[i] == PANEL_KIND_ROTATE && stage != 0) {
-            int cx = panelToFixed(panelRaw[r + 4]);
-            int cz = panelToFixed(panelRaw[r + 5]);
-            int angle = (int) ((long) panelRaw[r + 6] * stage * MathUtils.FULL_CIRCLE / (360L * STAGE_ONE));
-            int sin = MathUtils.fastSin(angle);
-            int cos = MathUtils.fastCos(angle);
-            int ox0 = x0 - cx, oz0 = z0 - cz, ox1 = x1 - cx, oz1 = z1 - cz;
-            x0 = cx + (int) (((long) cos * ox0 - (long) sin * oz0) >> 16);
-            z0 = cz + (int) (((long) sin * ox0 + (long) cos * oz0) >> 16);
-            x1 = cx + (int) (((long) cos * ox1 - (long) sin * oz1) >> 16);
-            z1 = cz + (int) (((long) sin * ox1 + (long) cos * oz1) >> 16);
-        }
-        Point2D a = vertices[panelV0[i]];
-        Point2D b = vertices[panelV1[i]];
-        a.x = x0;
-        a.y = z0;
-        b.x = x1;
-        b.y = z1;
-        WallDefinition coll = panelCollide[i];
-        if (coll == null) return;
-        // Same normal as WallDefinition.initializeWall, for the collision code.
-        int dy = a.y - b.y;
-        int dx = b.x - a.x;
-        int length = MathUtils.preciseHypot(dx, dy);
-        if (length == 0) return;
-        coll.normalVector.x = MathUtils.fixedPointDivide(dy, length);
-        coll.normalVector.y = MathUtils.fixedPointDivide(dx, length);
-    }
-
-    /** Runs once per tick: rotating panels follow their proc, door panels follow open/closed. */
-    private void updatePanels() {
-        for (int i = 0; i < panelCount; i++) {
-            int p = panelProc[i];
-            int stage = p >= 0 ? procStage[p] : 0;
-            if (panelKind[i] == PANEL_KIND_ROTATE) {
-                if (stage != panelLastStage[i]) {
-                    panelLastStage[i] = stage;
-                    placePanel(i, stage);
-                }
-            } else {
-                boolean closed = stage == 0;
-                if (closed != panelClosed[i]) {
-                    panelClosed[i] = closed;
-                    Vector defs = panelDefs[i];
-                    for (int d = 0; d < defs.size(); d++) {
-                        ((WallDefinition) defs.elementAt(d)).disabled = !closed;
-                    }
-                }
-            }
-        }
-        for (int p = 0; p < procCount; p++) {
-            boolean closed = procStage[p] == 0;
-            Vector hide = procHideWalls[p];
-            if (hide != null) {
-                for (int h = 0; h < hide.size(); h++) {
-                    ((WallDefinition) hide.elementAt(h)).hidden = closed;
-                }
-            }
-            Vector faces = procFaces[p];
-            if (faces != null && closed != procFaceShowsDoor[p]) {
-                procFaceShowsDoor[p] = closed;
-                Vector saved = procFaceSaved[p];
-                for (int f = 0; f < faces.size(); f++) {
-                    WallSurface surf = (WallSurface) faces.elementAt(f);
-                    if (closed) {
-                        surf.upperTextureId = (byte) procDoorSlot[p];
-                        surf.mainTextureId = (byte) procDoorSlot[p];
-                        surf.lowerTextureId = (byte) procDoorSlot[p];
-                    } else {
-                        int[] sv = (int[]) saved.elementAt(f);
-                        surf.upperTextureId = (byte) sv[0];
-                        surf.mainTextureId = (byte) sv[1];
-                        surf.lowerTextureId = (byte) sv[2];
-                    }
-                }
-            }
-        }
-    }
-
-    private void updateLevelExit() {
-        int alive = 0;
-        for (int i = 0; i < monCount; i++) {
-            if (monState[i] != MSTATE_INACTIVE && monState[i] != MSTATE_DEAD) alive++;
-        }
-        boolean near = Math.abs((playerBody.x - (exitX << 16)) >> 16) < CELL_UNITS
-                && Math.abs((playerBody.z - (exitZ << 16)) >> 16) < CELL_UNITS;
-        if (!near) return;
-        if (alive == 0) {
-            levelCompleted = true;
-        } else if (hudMessageTimer <= 0) {
-            setMessage("SECTOR NOT CLEAR", 30);
-        }
-    }
-
     // ==================== Level & Entity Sidecar Loading ====================
 
     public void loadLevel(int levelIndex) {
@@ -1239,8 +417,6 @@ public final class GameWorld {
         this.gameOver = false;
         this.muzzleFlashTimer = 0;
         this.damageFlashTimer = 0;
-        this.blastFlashTimer = 0;
-        for (int i = 0; i < MAX_BLAST_FX; i++) blastFxLeft[i] = 0;
         this.weaponCooldown = 0;
         this.weaponAnimTick = 0;
 
@@ -1255,26 +431,16 @@ public final class GameWorld {
         this.monCount = 0;
         this.itemCount = 0;
         this.propCount = 0;
-        for (int i = 0; i < MAX_PROPS; i++) propMovProc[i] = -1;
         for (int i = 0; i < MAX_LIMBS; i++) limbActive[i] = false;
         for (int i = 0; i < MAX_PROJ; i++) projActive[i] = false;
+        this.blastFlashTimer = 0;
+        for (int i = 0; i < MAX_BLAST_FX; i++) blastFxLeft[i] = 0;
 
         // Load Chasm 3D entities sidecar
         String entPath = "/levels/entities" + (levelIndex + 1) + ".bin";
         loadEntitiesSidecar(entPath);
 
-        // Doors, switches and keys are per level; the player starts each level without keys
-        loadProcsSidecar("/levels/procs" + (levelIndex + 1) + ".bin");
-        attachMovers();
-        attachPanels();
-        for (int m = 0; m < monCount; m++) {
-            pushMonsterOutOfProps(m);   // a platform may stand where a monster was placed
-        }
-        hasGreenKey = false;
-        hasRedKey = false;
-        hasBlueKey = false;
-
-        setMessage(levelLabel(levelIndex, true), 45);
+        setMessage(LEVEL_NAMES[levelIndex], 45);
     }
 
     private void loadEntitiesSidecar(String entPath) {
@@ -1287,8 +453,8 @@ public final class GameWorld {
             int spawnX = dis.readShort();
             int spawnZ = dis.readShort();
             int spawnAng4096 = dis.readShort() & 4095;
-            this.exitX = dis.readShort();
-            this.exitZ = dis.readShort();
+            int exitX = dis.readShort();
+            int exitZ = dis.readShort();
 
             this.playerBody.x = spawnX << 16;
             this.playerBody.z = spawnZ << 16;
@@ -1340,7 +506,7 @@ public final class GameWorld {
                 itemSector[i] = getSectorAtPoint(itemX[i], itemZ[i]);
             }
 
-            // Props: >H count, then >BhhB (modelId 30..32 or 38 gate lock, px, pz, pang)
+            // Props: >H count, then >BhhB (modelId 30..32, px, pz, pang)
             int pCount = dis.readUnsignedShort();
             this.propCount = pCount < MAX_PROPS ? pCount : MAX_PROPS;
             for (int i = 0; i < pCount; i++) {
@@ -1352,12 +518,12 @@ public final class GameWorld {
                 int halfZ = dis.readShort();
                 if (i >= MAX_PROPS) continue;
 
-                if (modelId != LOCK_MODEL && (modelId < 30 || modelId > 32)) modelId = 30 + (i % 3);
+                if (modelId < 30 || modelId > 32) modelId = 30 + (i % 3);
                 propActive[i] = true;
-                propHP[i] = modelId == LOCK_MODEL ? LOCK_HP : BARREL_HP;
                 propHalfX[i] = halfX << 16;
                 propHalfZ[i] = halfZ << 16;
                 propModelId[i] = modelId;
+                propHP[i] = BARREL_HP;
                 propX[i] = xUnits << 16;
                 propZ[i] = zUnits << 16;
                 propAngle[i] = MathUtils.fromAngle4096((pang & 7) << 9);
@@ -1438,6 +604,193 @@ public final class GameWorld {
         this.hudMessageTimer = ticks;
     }
 
+    // ==================== Barrel helpers (restored from 055acab, door-free) ====================
+    public boolean isBarrel(int p) {
+        return p >= 0 && p < propCount && propActive[p] && propModelId[p] == BARREL_MODEL;
+    }
+    public void damageBarrel(int p, int dmg) {
+        if (!isBarrel(p)) return;
+        propHP[p] -= dmg;
+        if (propHP[p] <= 0) detonateBarrel(p);
+    }
+    private void detonateBarrel(int first) {
+        int head = 0;
+        int tail = 0;
+        propActive[first] = false;
+        blastQueue[tail++] = first;
+        while (head < tail) {
+            int b = blastQueue[head++];
+            int cx = propX[b];
+            int cz = propZ[b];
+            SoundManager.playSfx(SoundManager.SFX_ROCKET);
+            spawnBlastFx(cx, cz);
+            for (int k = 0; k < 4; k++) {
+                spawnProjectile(false, PROJ_GIB, cx, 8 << 16, cz, nextRand() & 0xFFFF, 0);
+            }
+            for (int q = 0; q < propCount; q++) {
+                if (!isBarrel(q)) continue;
+                int d = blastDistance(cx, cz, propX[q], propZ[q]);
+                if (d >= BARREL_BLAST_RADIUS) continue;
+                propHP[q] -= blastDamage(d);
+                if (propHP[q] <= 0) {
+                    propActive[q] = false;
+                    blastQueue[tail++] = q;
+                }
+            }
+            for (int m = 0; m < monCount; m++) {
+                if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
+                int d = blastDistance(cx, cz, monX[m], monZ[m]);
+                if (d < BARREL_BLAST_RADIUS) {
+                    int dmg = blastDamage(d);
+                    if (dmg > 0) damageMonster(m, dmg);
+                }
+            }
+            int pd = blastDistance(cx, cz, playerBody.x, playerBody.z);
+            if (pd < BARREL_BLAST_RADIUS) {
+                blastFlashTimer = BLAST_FLASH_TICKS;
+                int dmg = blastDamage(pd);
+                if (dmg > 0) damagePlayer(dmg);
+            }
+        }
+    }
+    private void spawnBlastFx(int cx, int cz) {
+        int slot = 0;
+        for (int i = 0; i < MAX_BLAST_FX; i++) {
+            if (blastFxLeft[i] == 0) { slot = i; break; }
+            if (blastFxLeft[i] < blastFxLeft[slot]) slot = i;
+        }
+        SectorData sd = getSectorDataAtPoint(cx, cz);
+        int floorFP = (sd != null ? sd.floorHeight : 0) << 16;
+        blastFxX[slot] = cx;
+        blastFxY[slot] = floorFP + (20 << 16);
+        blastFxZ[slot] = cz;
+        blastFxLeft[slot] = BLAST_FX_LIFE;
+    }
+    private void triggerMegazapperBlast(int cx, int cz) {
+        SoundManager.playSfx(SoundManager.SFX_ROCKET);
+        spawnBlastFx(cx, cz);
+        for (int k = 0; k < 4; k++) spawnProjectile(false, PROJ_GIB, cx, 8 << 16, cz, nextRand() & 0xFFFF, 0);
+        int head = 0, tail = 0;
+        // Damage barrels in radius; those that die enter the barrel chain
+        for (int q = 0; q < propCount; q++) {
+            if (!isBarrel(q)) continue;
+            int d = blastDistance(cx, cz, propX[q], propZ[q]);
+            if (d >= BARREL_BLAST_RADIUS) continue;
+            propHP[q] -= blastDamage(d);
+            if (propHP[q] <= 0) { propActive[q] = false; blastQueue[tail++] = q; }
+        }
+        while (head < tail) {
+            int b = blastQueue[head++];
+            int bx = propX[b], bz = propZ[b];
+            SoundManager.playSfx(SoundManager.SFX_ROCKET);
+            spawnBlastFx(bx, bz);
+            for (int k = 0; k < 4; k++) spawnProjectile(false, PROJ_GIB, bx, 8 << 16, bz, nextRand() & 0xFFFF, 0);
+            for (int q = 0; q < propCount; q++) {
+                if (!isBarrel(q)) continue;
+                int d = blastDistance(bx, bz, propX[q], propZ[q]);
+                if (d >= BARREL_BLAST_RADIUS) continue;
+                propHP[q] -= blastDamage(d);
+                if (propHP[q] <= 0) { propActive[q] = false; blastQueue[tail++] = q; }
+            }
+            for (int m = 0; m < monCount; m++) {
+                if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
+                int d = blastDistance(bx, bz, monX[m], monZ[m]);
+                if (d < BARREL_BLAST_RADIUS) { int dmg = blastDamage(d); if (dmg > 0) damageMonster(m, dmg); }
+            }
+            int pd = blastDistance(bx, bz, playerBody.x, playerBody.z);
+            if (pd < BARREL_BLAST_RADIUS) { blastFlashTimer = BLAST_FLASH_TICKS; int dmg = blastDamage(pd); if (dmg > 0) damagePlayer(dmg); }
+        }
+        for (int m = 0; m < monCount; m++) {
+            if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
+            int d = blastDistance(cx, cz, monX[m], monZ[m]);
+            if (d < BARREL_BLAST_RADIUS) { int dmg = blastDamage(d); if (dmg > 0) damageMonster(m, dmg); }
+        }
+        int pd = blastDistance(cx, cz, playerBody.x, playerBody.z);
+        if (pd < BARREL_BLAST_RADIUS) { blastFlashTimer = BLAST_FLASH_TICKS; int dmg = blastDamage(pd); if (dmg > 0) damagePlayer(dmg); }
+    }
+    private void updateBlastFx() {
+        if (blastFlashTimer > 0) blastFlashTimer--;
+        for (int i = 0; i < MAX_BLAST_FX; i++) {
+            if (blastFxLeft[i] > 0) blastFxLeft[i]--;
+        }
+    }
+    private void drawBlastFx(int[] buf) {
+        if (blastFlashTimer > 0) {
+            int add = blastFlashTimer * 22;
+            int addG = add * 3 / 4;
+            int addB = add / 3;
+            for (int i = 0; i < PortalRenderer.SCREEN_BUFFER_SIZE; i++) {
+                int c = buf[i];
+                int r = ((c >> 16) & 0xFF) + add;
+                int g = ((c >> 8) & 0xFF) + addG;
+                int b = (c & 0xFF) + addB;
+                buf[i] = (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
+            }
+        }
+        for (int i = 0; i < MAX_BLAST_FX; i++) {
+            int left = blastFxLeft[i];
+            if (left <= 0) continue;
+            if (!PortalRenderer.projectLast(blastFxX[i], blastFxY[i], blastFxZ[i], blastScreen)) continue;
+            int age = BLAST_FX_LIFE - left;
+            int radius = age < 6 ? 3 + age * 4 : 27 - (age - 6) * 6;
+            if (radius < 2) radius = 2;
+            drawFireball(buf, blastScreen[0], blastScreen[1], radius, 255 * left / BLAST_FX_LIFE);
+        }
+    }
+    private static void drawFireball(int[] buf, int cx, int cy, int radius, int alpha) {
+        final int w = PortalRenderer.VIEWPORT_WIDTH;
+        final int h = PortalRenderer.VIEWPORT_HEIGHT;
+        int r2 = radius * radius;
+        int y0 = Math.max(0, cy - radius);
+        int y1 = Math.min(h - 1, cy + radius);
+        int x0 = Math.max(0, cx - radius);
+        int x1 = Math.min(w - 1, cx + radius);
+        for (int y = y0; y <= y1; y++) {
+            int dy = y - cy;
+            int row = y * w;
+            for (int x = x0; x <= x1; x++) {
+                int dx = x - cx;
+                int d2 = dx * dx + dy * dy;
+                if (d2 > r2) continue;
+                int t = d2 * 256 / r2;
+                int col;
+                if (t < 80) col = 0xFFF2B0;
+                else if (t < 170) col = 0xFF8A20;
+                else col = 0xB02A10;
+                int a = alpha * (256 - t / 2) >> 8;
+                int old = buf[row + x];
+                int or_ = (old >> 16) & 0xFF, og = (old >> 8) & 0xFF, ob = old & 0xFF;
+                int nr = or_ + ((((col >> 16) & 0xFF) - or_) * a >> 8);
+                int ng = og + ((((col >> 8) & 0xFF) - og) * a >> 8);
+                int nb = ob + (((col & 0xFF) - ob) * a >> 8);
+                buf[row + x] = (nr << 16) | (ng << 8) | nb;
+            }
+        }
+    }
+    private static int blastDamage(int d) {
+        return (BARREL_BLAST_DAMAGE * (BARREL_BLAST_RADIUS - d) + (BARREL_BLAST_RADIUS >> 1)) / BARREL_BLAST_RADIUS;
+    }
+    private static int blastDistance(int ax, int az, int bx, int bz) {
+        int dx = (ax - bx) >> 16;
+        int dz = (az - bz) >> 16;
+        return isqrt(dx * dx + dz * dz);
+    }
+    private static int isqrt(int v) {
+        int res = 0;
+        int bit = 1 << 30;
+        while (bit > v) bit >>= 2;
+        while (bit != 0) {
+            if (v >= res + bit) {
+                v -= res + bit;
+                res = (res >> 1) + bit;
+            } else {
+                res >>= 1;
+            }
+            bit >>= 2;
+        }
+        return res;
+    }
+
     // ==================== Rendering Entry Point ====================
 
     public void render3DView(int[] targetScreenBuffer) {
@@ -1477,7 +830,7 @@ public final class GameWorld {
 
         // 3. Barrel blast: screen flash and fireballs, then the damage tint if the player was hit
         drawBlastFx(PortalRenderer.screenBuffer);
-
+        // 3b. Apply damage flash tint if player was hit
         if (damageFlashTimer > 0) {
             int[] buf = PortalRenderer.screenBuffer;
             int len = PortalRenderer.SCREEN_BUFFER_SIZE;
@@ -1520,7 +873,6 @@ public final class GameWorld {
         if (wallDefinitions != null) {
             for (int i = 0; i < wallDefinitions.length; i++) {
                 WallDefinition wall = wallDefinitions[i];
-                if (wall.disabled) continue;
                 if (wall.isCollidable() || CollisionSystem.isWallPassableForSector(curSector, wall)) {
                     CollisionSystem.resolveWallCollision(collisionTestPoint, wall, vertices);
                 }
@@ -1575,36 +927,66 @@ public final class GameWorld {
             if (!itemActive[i]) continue;
             if (Math.abs(playerBody.x - itemX[i]) < pickupRadius
                     && Math.abs(playerBody.z - itemZ[i]) < pickupRadius) {
+                int modelId = itemModelId[i];
+                // 17 medkit, 18 armor, 19 rifle weapon, 20 shotgun, 21 chaingun ammo, 22 crossbow, 23 saw, 24 crossbow ammo, 25 saw ammo, 26 megazapper
+                if (modelId == 17 && health >= 100) continue;
                 itemActive[i] = false;
-                if (itemModelId[i] == 27) {
-                    hasRedKey = true;
-                    setMessage("RED KEY", 30);
-                    continue;
-                }
-                if (itemModelId[i] == 28) {
-                    hasGreenKey = true;
-                    setMessage("GREEN KEY", 30);
-                    continue;
-                }
-                if (itemModelId[i] == 29) {
-                    hasBlueKey = true;
-                    setMessage("BLUE KEY", 30);
-                    continue;
-                }
-                int t = itemType[i] % 8;
-                if (t == 0) {
+                if (modelId == 17) {
                     health = Math.min(100, health + 25);
-                    setMessage("MEDKIT +25 HP", 25);
-                } else if (t == 1) {
+                    setMessage(TextTable.get("HUD_MEDKIT", "MEDKIT +25 HP"), 25);
+                } else if (modelId == 18) {
                     armor = Math.min(100, armor + 25);
-                    setMessage("ARMOR +25", 25);
+                    setMessage(TextTable.get("HUD_ARMOR", "ARMOR +25"), 25);
+                } else if (modelId == 19) {
+                    weaponOwned[0] = true; ammo[0] = Math.min(200, ammo[0] + 15);
+                    if (curWeapon < 0) curWeapon = 0;
+                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[0], 30);
+                } else if (modelId == 20) {
+                    weaponOwned[1] = true; ammo[1] = Math.min(200, ammo[1] + 15);
+                    if (curWeapon < 1) curWeapon = 1;
+                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[1], 30);
+                } else if (modelId == 21) {
+                    // Chaingun ammo (small box 79)
+                    ammo[2] = Math.min(200, ammo[2] + 15);
+                    if (!weaponOwned[2]) { weaponOwned[2] = true; if (curWeapon < 2) curWeapon = 2; }
+                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[2] + " AMMO", 30);
+                } else if (modelId == 22) {
+                    weaponOwned[3] = true; ammo[3] = Math.min(200, ammo[3] + 15);
+                    if (curWeapon < 3) curWeapon = 3;
+                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[3], 30);
+                } else if (modelId == 23) {
+                    weaponOwned[4] = true; ammo[4] = Math.min(200, ammo[4] + 15);
+                    if (curWeapon < 4) curWeapon = 4;
+                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[4], 30);
+                } else if (modelId == 24) {
+                    // Crossbow ammo (disk 53)
+                    ammo[3] = Math.min(200, ammo[3] + 8);
+                    if (!weaponOwned[3]) { weaponOwned[3] = true; if (curWeapon < 3) curWeapon = 3; }
+                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[3] + " AMMO", 30);
+                } else if (modelId == 25) {
+                    // Saw ammo (disc 205)
+                    ammo[4] = Math.min(200, ammo[4] + 8);
+                    if (!weaponOwned[4]) { weaponOwned[4] = true; if (curWeapon < 4) curWeapon = 4; }
+                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[4] + " AMMO", 30);
+                } else if (modelId == 26) {
+                    weaponOwned[5] = true; ammo[5] = Math.min(200, ammo[5] + 8);
+                    if (curWeapon < 5) curWeapon = 5;
+                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[5], 30);
+                } else if (modelId >= 27 && modelId <= 29) {
+                    // Keys 27 red, 28 green, 29 blue - not used in ITEMS but for doors (handled via proc), give ammo + message
+                    ammo[0] = Math.min(200, ammo[0] + 5);
+                    setMessage("GOT KEY " + (modelId - 26), 30);
                 } else {
-                    int w = t - 2;
-                    if (w >= 0 && w < 6) {
-                        weaponOwned[w] = true;
-                        ammo[w] = Math.min(200, ammo[w] + 15);
-                        if (curWeapon < w) curWeapon = w;
-                        setMessage("GOT " + WEAPON_NAMES[w], 30);
+                    // Fallback for unknown via old %8 logic
+                    int t = itemType[i] % 8;
+                    if (t >= 2) {
+                        int w = t - 2;
+                        if (w >= 0 && w < 6) {
+                            weaponOwned[w] = true;
+                            ammo[w] = Math.min(200, ammo[w] + 15);
+                            if (curWeapon < w) curWeapon = w;
+                            setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[w], 30);
+                        }
                     }
                 }
                 SoundManager.playSfx(SoundManager.SFX_PICKUP);
@@ -1693,239 +1075,31 @@ public final class GameWorld {
             }
         }
 
-        // Barrels and gate locks are targets too. A prop only counts if it is nearer than the best monster.
-        int bestProp = -1;
-        for (int p = 0; p < propCount; p++) {
-            if (!isShootable(p)) continue;
-            int rx = propX[p] - playerBody.x;
-            int rz = propZ[p] - playerBody.z;
-            int viewX = (int) (((long) cos * rx - (long) sin * rz) >> 16);
-            int viewDepth = (int) (((long) sin * rx + (long) cos * rz) >> 16);
-            if (viewDepth <= (8 << 16) || viewDepth > (900 << 16) || viewDepth >= bestDepth) continue;
-            int half = Math.max(propHalfX[p], propHalfZ[p]) + (12 << 16) + (viewDepth >> 3);
-            if (Math.abs(viewX) <= half && hasLineOfSight(playerBody.x, playerBody.z, propX[p], propZ[p])) {
-                bestDepth = viewDepth;
-                bestProp = p;
-                bestMon = -1;
-            }
-        }
-
-        if (bestProp >= 0) {
-            damageProp(bestProp, damage);
-        } else if (bestMon >= 0) {
+        if (bestMon >= 0) {
             damageMonster(bestMon, damage);
-        }
-    }
-
-    /** True if prop p is a live explosive barrel. */
-    public boolean isBarrel(int p) {
-        return p >= 0 && p < propCount && propActive[p] && propModelId[p] == BARREL_MODEL;
-    }
-
-    /** True if prop p is a live gate lock (shot to open its 'destroy' proc). */
-    public boolean isLock(int p) {
-        return p >= 0 && p < propCount && propActive[p] && propModelId[p] == LOCK_MODEL;
-    }
-
-    /** True if a shot or projectile can damage prop p (barrels and gate locks). */
-    public boolean isShootable(int p) {
-        return isBarrel(p) || isLock(p);
-    }
-
-    /** Damages a shootable prop: a barrel may explode; a lock that breaks fires its 'destroy' procs. */
-    public void damageProp(int p, int dmg) {
-        if (isLock(p)) {
-            propHP[p] -= dmg;
-            if (propHP[p] <= 0) {
-                propActive[p] = false;
-                destroyLocksAt(cellOf(propX[p]), cellOf(propZ[p]));
-            }
         } else {
-            damageBarrel(p, dmg);
-        }
-    }
-
-    /** Opens every proc whose 'destroy' link is on cell (cx, cz) (the lock there was shot). */
-    private void destroyLocksAt(int cx, int cz) {
-        for (int p = 0; p < procCount; p++) {
-            int[] tr = procTrig[p];
-            for (int t = 0; t < tr.length; t += 3) {
-                if (tr[t] == TRIG_DESTROY && tr[t + 1] == cx && tr[t + 2] == cz) {
-                    destroyProc(p);
-                    break;
-                }
-            }
-        }
-    }
-
-    /** Applies damage to barrel p. A barrel at 0 HP explodes and may set off barrels nearby. */
-    public void damageBarrel(int p, int dmg) {
-        if (!isBarrel(p)) return;
-        propHP[p] -= dmg;
-        if (propHP[p] <= 0) detonateBarrel(p);
-    }
-
-    /**
-     * Explodes barrel `first`. Each blast deals round(base * (1 - d / radius)) to monsters and the
-     * player within the radius, and to other barrels (which chain if they reach 0 HP). Chained
-     * barrels are processed from a queue, so the chain is iterative and each barrel explodes once.
-     */
-    private void detonateBarrel(int first) {
-        int head = 0;
-        int tail = 0;
-        propActive[first] = false;    // no longer collidable, rendered, or targetable
-        blastQueue[tail++] = first;
-        while (head < tail) {
-            int b = blastQueue[head++];
-            int cx = propX[b];
-            int cz = propZ[b];
-            SoundManager.playSfx(SoundManager.SFX_ROCKET);
-            spawnBlastFx(cx, cz);
-            for (int k = 0; k < 4; k++) {
-                spawnProjectile(false, PROJ_GIB, cx, 8 << 16, cz, nextRand() & 0xFFFF, 0);
-            }
-
+            // No monster hit: check for explosive barrels
+            int bestBarrel = -1;
+            int bestBarrelDepth = Integer.MAX_VALUE;
             for (int p = 0; p < propCount; p++) {
                 if (!isBarrel(p)) continue;
-                int d = blastDistance(cx, cz, propX[p], propZ[p]);
-                if (d >= BARREL_BLAST_RADIUS) continue;
-                propHP[p] -= blastDamage(d);
-                if (propHP[p] <= 0) {
-                    propActive[p] = false;
-                    blastQueue[tail++] = p;
+                int rx = propX[p] - playerBody.x;
+                int rz = propZ[p] - playerBody.z;
+                int viewX = (int) (((long) cos * rx - (long) sin * rz) >> 16);
+                int viewDepth = (int) (((long) sin * rx + (long) cos * rz) >> 16);
+                if (viewDepth <= (8 << 16) || viewDepth > (900 << 16)) continue;
+                int hitHalfWidth = (22 << 16) + (viewDepth >> 3);
+                if (Math.abs(viewX) <= hitHalfWidth && viewDepth < bestBarrelDepth) {
+                    if (hasLineOfSight(playerBody.x, playerBody.z, propX[p], propZ[p])) {
+                        bestBarrelDepth = viewDepth;
+                        bestBarrel = p;
+                    }
                 }
             }
-
-            for (int m = 0; m < monCount; m++) {
-                if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
-                int d = blastDistance(cx, cz, monX[m], monZ[m]);
-                if (d < BARREL_BLAST_RADIUS) {
-                    int dmg = blastDamage(d);
-                    if (dmg > 0) damageMonster(m, dmg);
-                }
-            }
-
-            int pd = blastDistance(cx, cz, playerBody.x, playerBody.z);
-            if (pd < BARREL_BLAST_RADIUS) {
-                blastFlashTimer = BLAST_FLASH_TICKS;
-                int dmg = blastDamage(pd);
-                if (dmg > 0) damagePlayer(dmg);
+            if (bestBarrel >= 0) {
+                damageBarrel(bestBarrel, damage);
             }
         }
-    }
-
-    /** Starts a fireball at (cx, cz), reusing the oldest slot when all are busy. */
-    private void spawnBlastFx(int cx, int cz) {
-        int slot = 0;
-        for (int i = 0; i < MAX_BLAST_FX; i++) {
-            if (blastFxLeft[i] == 0) { slot = i; break; }
-            if (blastFxLeft[i] < blastFxLeft[slot]) slot = i;
-        }
-        SectorData sd = getSectorDataAtPoint(cx, cz);
-        int floorFP = (sd != null ? sd.floorHeight : 0) << 16;
-        blastFxX[slot] = cx;
-        blastFxY[slot] = floorFP + (20 << 16);
-        blastFxZ[slot] = cz;
-        blastFxLeft[slot] = BLAST_FX_LIFE;
-    }
-
-    /** Ages the fireballs and the screen flash by one tick. */
-    private void updateBlastFx() {
-        if (blastFlashTimer > 0) blastFlashTimer--;
-        for (int i = 0; i < MAX_BLAST_FX; i++) {
-            if (blastFxLeft[i] > 0) blastFxLeft[i]--;
-        }
-    }
-
-    /**
-     * Draws the barrel blast on the finished 3D frame: a whole-screen warm flash while the
-     * player is inside the blast radius, then the fireballs at the blast points. Fireballs are
-     * projected with the camera of the current frame; they are not occluded by walls.
-     */
-    private void drawBlastFx(int[] buf) {
-        if (blastFlashTimer > 0) {
-            int add = blastFlashTimer * 22;
-            int addG = add * 3 / 4;
-            int addB = add / 3;
-            for (int i = 0; i < PortalRenderer.SCREEN_BUFFER_SIZE; i++) {
-                int c = buf[i];
-                int r = ((c >> 16) & 0xFF) + add;
-                int g = ((c >> 8) & 0xFF) + addG;
-                int b = (c & 0xFF) + addB;
-                buf[i] = (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
-            }
-        }
-        for (int i = 0; i < MAX_BLAST_FX; i++) {
-            int left = blastFxLeft[i];
-            if (left <= 0) continue;
-            if (!PortalRenderer.projectLast(blastFxX[i], blastFxY[i], blastFxZ[i], blastScreen)) continue;
-            int age = BLAST_FX_LIFE - left;
-            // Grows to about 27 px, then shrinks while it fades.
-            int radius = age < 6 ? 3 + age * 4 : 27 - (age - 6) * 6;
-            if (radius < 2) radius = 2;
-            drawFireball(buf, blastScreen[0], blastScreen[1], radius, 255 * left / BLAST_FX_LIFE);
-        }
-    }
-
-    /** Alpha-blends one fireball disc: white-yellow core, orange ring, dark red edge. */
-    private static void drawFireball(int[] buf, int cx, int cy, int radius, int alpha) {
-        final int w = PortalRenderer.VIEWPORT_WIDTH;
-        final int h = PortalRenderer.VIEWPORT_HEIGHT;
-        int r2 = radius * radius;
-        int y0 = Math.max(0, cy - radius);
-        int y1 = Math.min(h - 1, cy + radius);
-        int x0 = Math.max(0, cx - radius);
-        int x1 = Math.min(w - 1, cx + radius);
-        for (int y = y0; y <= y1; y++) {
-            int dy = y - cy;
-            int row = y * w;
-            for (int x = x0; x <= x1; x++) {
-                int dx = x - cx;
-                int d2 = dx * dx + dy * dy;
-                if (d2 > r2) continue;
-                int t = d2 * 256 / r2;
-                int col;
-                if (t < 80) col = 0xFFF2B0;
-                else if (t < 170) col = 0xFF8A20;
-                else col = 0xB02A10;
-                int a = alpha * (256 - t / 2) >> 8;
-                int old = buf[row + x];
-                int or = (old >> 16) & 0xFF, og = (old >> 8) & 0xFF, ob = old & 0xFF;
-                int nr = or + ((((col >> 16) & 0xFF) - or) * a >> 8);
-                int ng = og + ((((col >> 8) & 0xFF) - og) * a >> 8);
-                int nb = ob + (((col & 0xFF) - ob) * a >> 8);
-                buf[row + x] = (nr << 16) | (ng << 8) | nb;
-            }
-        }
-    }
-
-    /** Blast damage at distance d (world units), rounded, linear falloff to 0 at the radius. */
-    private static int blastDamage(int d) {
-        return (BARREL_BLAST_DAMAGE * (BARREL_BLAST_RADIUS - d) + (BARREL_BLAST_RADIUS >> 1)) / BARREL_BLAST_RADIUS;
-    }
-
-    /** Horizontal distance in whole world units between two 16.16 points. */
-    private static int blastDistance(int ax, int az, int bx, int bz) {
-        int dx = (ax - bx) >> 16;
-        int dz = (az - bz) >> 16;
-        return isqrt(dx * dx + dz * dz);
-    }
-
-    /** Integer square root (floor) of a non-negative int. */
-    private static int isqrt(int v) {
-        int res = 0;
-        int bit = 1 << 30;
-        while (bit > v) bit >>= 2;
-        while (bit != 0) {
-            if (v >= res + bit) {
-                v -= res + bit;
-                res = (res >> 1) + bit;
-            } else {
-                res >>= 1;
-            }
-            bit >>= 2;
-        }
-        return res;
     }
 
     /**
@@ -2103,7 +1277,7 @@ public final class GameWorld {
         if (wallDefinitions == null) return true;
         for (int i = 0; i < wallDefinitions.length; i++) {
             WallDefinition wall = wallDefinitions[i];
-            if (wall.disabled || !CollisionSystem.isWallSolid(wall)) continue;
+            if (!CollisionSystem.isWallSolid(wall)) continue;
             Point2D vStart = vertices[wall.startVertexId & 0xFFFF];
             Point2D vEnd = vertices[wall.endVertexId & 0xFFFF];
             if (CollisionSystem.doLineSegmentsIntersect(x1, z1, x2, z2, vStart.x, vStart.y, vEnd.x, vEnd.y)) {
@@ -2119,7 +1293,27 @@ public final class GameWorld {
                 return;
             }
         }
-        setMessage("SECTOR CLEAR! PRESS * FOR NEXT LEVEL", 90);
+        setMessage(TextTable.get("HUD_SECTOR_CLEAR", "SECTOR CLEAR! PRESS 0 FOR NEXT LEVEL"), 90);
+    }
+
+    public boolean isSectorClear() {
+        for (int i = 0; i < monCount; i++) {
+            if (monState[i] != MSTATE_INACTIVE && monState[i] != MSTATE_DEAD) return false;
+        }
+        return monCount > 0;
+    }
+
+    /** '*' key: use. Clears the level once every enemy is down; doors are not in the portal data yet. */
+    public void interactOrNextLevel() {
+        int alive = 0;
+        for (int i = 0; i < monCount; i++) {
+            if (monState[i] != MSTATE_INACTIVE && monState[i] != MSTATE_DEAD) alive++;
+        }
+        if (alive == 0) {
+            levelCompleted = true;
+            return;
+        }
+        setMessage(TextTable.get("HUD_NOTHING", "NOTHING TO USE HERE - CLEAR THE SECTOR"), 40);
     }
 
     /** '0' key: jump. */
@@ -2150,14 +1344,20 @@ public final class GameWorld {
         if (weaponAnimTick > 0) weaponAnimTick--;
         if (muzzleFlashTimer > 0) muzzleFlashTimer--;
         if (damageFlashTimer > 0) damageFlashTimer--;
-        updateBlastFx();
-        if (hudMessageTimer > 0) hudMessageTimer--;
+        if (hudMessageTimer > 0) {
+            // Loop SECTOR CLEAR message until player presses 0: keep timer refreshed
+            if (hudMessage != null && hudMessage.indexOf("SECTOR CLEAR") >= 0) {
+                if (hudMessageTimer < 10) hudMessageTimer = 90;
+                else hudMessageTimer--;
+            } else {
+                hudMessageTimer--;
+            }
+        }
 
         updateDetachedLimbs();
         updateProjectiles();
+        updateBlastFx();
         updateMonsters();
-        updateProcs();
-        updateLevelExit();
     }
 
     private void updateDetachedLimbs() {
@@ -2209,38 +1409,56 @@ public final class GameWorld {
                 continue;
             }
 
+            boolean isMegazapper = projFromPlayer[i] && projDamage[i] == 85;
             if (!hasLineOfSight(projX[i], projZ[i], nx, nz)) {
-                projActive[i] = false;
+                if (isMegazapper) {
+                    int cx = projX[i], cz = projZ[i];
+                    projActive[i] = false;
+                    triggerMegazapperBlast(cx, cz);
+                } else {
+                    projActive[i] = false;
+                }
                 continue;
             }
 
             projX[i] = nx;
             projZ[i] = nz;
-            // Bolts keep their heading; saw-disks spin around their travel direction.
             if (projModelId[i] == PROJ_DISK) {
                 projSpin[i] = MathUtils.wrapAngle(projSpin[i] + 32000);
             }
             projSector[i] = getSectorAtPoint(nx, nz);
 
             if (projFromPlayer[i]) {
-                boolean hit = false;
-                for (int m = 0; m < monCount; m++) {
-                    if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
-                    if (Math.abs(nx - monX[m]) < hitRadius && Math.abs(nz - monZ[m]) < hitRadius) {
-                        damageMonster(m, projDamage[i]);
-                        projActive[i] = false;
-                        hit = true;
-                        break;
+                if (isMegazapper) {
+                    boolean hit = false;
+                    for (int m = 0; m < monCount; m++) {
+                        if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
+                        if (Math.abs(nx - monX[m]) < hitRadius && Math.abs(nz - monZ[m]) < hitRadius) { hit = true; break; }
                     }
-                }
-                if (!hit) {
-                    for (int p = 0; p < propCount; p++) {
-                        if (!isShootable(p)) continue;
-                        if (Math.abs(nx - propX[p]) < hitRadius + propHalfX[p]
-                                && Math.abs(nz - propZ[p]) < hitRadius + propHalfZ[p]) {
+                    if (!hit) for (int p = 0; p < propCount; p++) if (isBarrel(p) && Math.abs(nx - propX[p]) < hitRadius && Math.abs(nz - propZ[p]) < hitRadius) { hit = true; break; }
+                    if (hit) {
+                        int cx = nx, cz = nz;
+                        projActive[i] = false;
+                        triggerMegazapperBlast(cx, cz);
+                        continue;
+                    }
+                } else {
+                    for (int m = 0; m < monCount; m++) {
+                        if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
+                        if (Math.abs(nx - monX[m]) < hitRadius && Math.abs(nz - monZ[m]) < hitRadius) {
+                            damageMonster(m, projDamage[i]);
                             projActive[i] = false;
-                            damageProp(p, projDamage[i]);
                             break;
+                        }
+                    }
+                    if (projActive[i]) {
+                        for (int p = 0; p < propCount; p++) {
+                            if (!isBarrel(p)) continue;
+                            if (Math.abs(nx - propX[p]) < hitRadius && Math.abs(nz - propZ[p]) < hitRadius) {
+                                damageBarrel(p, projDamage[i]);
+                                projActive[i] = false;
+                                break;
+                            }
                         }
                     }
                 }
@@ -2293,7 +1511,8 @@ public final class GameWorld {
                 monFrameB[m] = (monFrameA[m] + 1) & 1;
                 monInterp[m] = (monStateTick[m] & 7) << 5;
 
-                if (distApprox < (380 << 16) && hasLineOfSight(monX[m], monZ[m], playerBody.x, playerBody.z)) {
+                int visDist = (enemyBehavior == ENEMY_AGGRESSIVE) ? (900 << 16) : (380 << 16);
+                if (distApprox < visDist && hasLineOfSight(monX[m], monZ[m], playerBody.x, playerBody.z)) {
                     monState[m] = MSTATE_CHASE;
                     monStateTick[m] = 0;
                     monAngle[m] = angleToPlayer;
@@ -2309,19 +1528,17 @@ public final class GameWorld {
                 // Can only attack if monster still has at least one arm!
                 boolean hasArm = (monPartMask[m] & (Model3D.MASK_RIGHT_HAND | Model3D.MASK_LEFT_HAND)) != 0;
 
-                if (hasArm && distApprox < (150 << 16) && (monStateTick[m] > 10)
+                int chaseDist = (enemyBehavior == ENEMY_AGGRESSIVE) ? (320 << 16) : (150 << 16);
+                if (hasArm && distApprox < chaseDist && (monStateTick[m] > 10)
                         && hasLineOfSight(monX[m], monZ[m], playerBody.x, playerBody.z)) {
                     monState[m] = MSTATE_ATTACK;
                     monStateTick[m] = 0;
-                } else if (distApprox > (44 << 16)) {
-                    // Step toward player
+                } else if (distApprox > (44 << 16) && monType[m] != 3) {
+                    // Turret (type 3) is stationary: only turns, never walks.
                     int stepX = (dx >= 0 ? 1 : -1) * Math.min(Math.abs(dx), 3 << 16);
                     int stepZ = (dz >= 0 ? 1 : -1) * Math.min(Math.abs(dz), 3 << 16);
                     int nx = monX[m] + stepX;
                     int nz = monZ[m] + stepZ;
-                    // Direct step first. When a prop box blocks it, the monster commits to a
-                    // detour side (+90 or -90 degrees) for DETOUR_TICKS so it does not
-                    // oscillate at the box corner.
                     if (monDetourTicks[m] > 0) {
                         monDetourTicks[m]--;
                         if (!tryMonsterStep(m, -stepZ * monDetourSide[m], stepX * monDetourSide[m])) {
@@ -2336,6 +1553,11 @@ public final class GameWorld {
                             monDetourTicks[m] = DETOUR_TICKS;
                         }
                     }
+                } else if (monType[m] == 3) {
+                    // Turret idle sway while targeting (no walk).
+                    monFrameA[m] = (monStateTick[m] >> 4) & 1;
+                    monFrameB[m] = (monFrameA[m] + 1) & 1;
+                    monInterp[m] = (monStateTick[m] & 15) << 4;
                 }
             } else if (st == MSTATE_ATTACK) {
                 monAngle[m] = angleToPlayer;
@@ -2350,7 +1572,8 @@ public final class GameWorld {
                     if ((monPartMask[m] & Model3D.MASK_RIGHT_HAND) != 0) {
                         monPartMask[m] |= Model3D.MASK_WEAPON_FIRE;
                     }
-                    if (distApprox < (240 << 16) && hasLineOfSight(monX[m], monZ[m], playerBody.x, playerBody.z)) {
+                    int dmgDist = (enemyBehavior == ENEMY_AGGRESSIVE) ? (500 << 16) : (240 << 16);
+                    if (distApprox < dmgDist && hasLineOfSight(monX[m], monZ[m], playerBody.x, playerBody.z)) {
                         damagePlayer(6 + (monType[m] >> 1));
                     }
                 } else {
@@ -2381,7 +1604,7 @@ public final class GameWorld {
         if (health <= 0) {
             health = 0;
             gameOver = true;
-            setMessage("YOU DIED! PRESS FIRE TO RESTART", 999);
+            setMessage(TextTable.get("HUD_YOUDIED", "YOU DIED! PRESS FIRE TO RESTART"), 999);
         }
     }
 }

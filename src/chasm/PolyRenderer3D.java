@@ -40,6 +40,11 @@ public final class PolyRenderer3D {
     private static final int NEAR_CLIP_FP = 6 << 16;
 
     public int shadingMode = SHADE_VERTEX_PAINT;
+    // When true, texel indices 0/255 are treated as fully transparent holes (weapon view)
+    // instead of falling back to the flat polygon colour.
+    private boolean transparentTexHoles = false;
+
+    public void setTransparentHoles(boolean v) { transparentTexHoles = v; }
 
     private final Model3D[] models;
 
@@ -245,8 +250,9 @@ public final class PolyRenderer3D {
                 int mType = world.monType[idx];
                 Model3D model = getModel(mType);
                 if (model != null) {
-                    // Brief additive blood-red glow while the hit flash is active (never a solid red override)
                     int tint = world.monPainTimer[idx] > 0 ? 0x6A1408 : 0;
+                    boolean wasTrans = transparentTexHoles;
+                    transparentTexHoles = true; // PNG с alpha — в игре тоже прозрачность (0/255)
                     renderWorldModel(
                         model,
                         world.monX[idx], floorHFixed, world.monZ[idx],
@@ -257,6 +263,7 @@ public final class PolyRenderer3D {
                         cameraX, camWorldH, cameraZ, sinAngle, cosAngle,
                         shadeFactor, tint, true, screenBuffer
                     );
+                    transparentTexHoles = wasTrans;
                 }
             } else if (type == ENT_LIMB) {
                 Model3D parent = getModel(world.limbMonsterType[idx]);
@@ -266,6 +273,8 @@ public final class PolyRenderer3D {
                     int limbFrame = (world.limbY[idx] > world.limbFloorY[idx])
                             ? ((world.levelTick >> 1) & 1)
                             : 2;
+                    boolean wasTrans = transparentTexHoles;
+                    transparentTexHoles = true;
                     renderWorldModel(
                         sub,
                         world.limbX[idx], world.limbY[idx], world.limbZ[idx],
@@ -276,12 +285,15 @@ public final class PolyRenderer3D {
                         cameraX, camWorldH, cameraZ, sinAngle, cosAngle,
                         shadeFactor, 0, true, screenBuffer
                     );
+                    transparentTexHoles = wasTrans;
                 }
             } else if (type == ENT_ITEM) {
                 Model3D model = getModel(world.itemModelId[idx]);
                 if (model != null) {
                     int spinAngle = MathUtils.wrapAngle(world.levelTick * 3600 + idx * 50000);
                     int bobH = floorHFixed + (MathUtils.fastSin(MathUtils.wrapAngle(world.levelTick * 8000 + idx * 40000)) * 3);
+                    boolean wasTrans = transparentTexHoles;
+                    transparentTexHoles = model.texData != null;
                     renderWorldModel(
                         model,
                         world.itemX[idx], bobH, world.itemZ[idx],
@@ -292,10 +304,13 @@ public final class PolyRenderer3D {
                         cameraX, camWorldH, cameraZ, sinAngle, cosAngle,
                         236, 0, true, screenBuffer
                     );
+                    transparentTexHoles = wasTrans;
                 }
             } else if (type == ENT_PROP) {
                 Model3D model = getModel(world.propModelId[idx]);
                 if (model != null) {
+                    boolean wasTrans = transparentTexHoles;
+                    transparentTexHoles = model.texData != null;
                     renderWorldModel(
                         model,
                         world.propX[idx], floorHFixed, world.propZ[idx],
@@ -306,6 +321,7 @@ public final class PolyRenderer3D {
                         cameraX, camWorldH, cameraZ, sinAngle, cosAngle,
                         shadeFactor, 0, true, screenBuffer
                     );
+                    transparentTexHoles = wasTrans;
                 }
             } else if (type == ENT_PROJ) {
                 Model3D model = getModel(world.projModelId[idx]);
@@ -315,6 +331,8 @@ public final class PolyRenderer3D {
                     int pAngle = (pid == GameWorld.PROJ_DISK)
                             ? MathUtils.wrapAngle(world.projAngle[idx] + world.projSpin[idx])
                             : world.projAngle[idx];
+                    boolean wasTrans = transparentTexHoles;
+                    transparentTexHoles = model.texData != null;
                     renderWorldModel(
                         model,
                         world.projX[idx], world.projY[idx], world.projZ[idx],
@@ -325,6 +343,7 @@ public final class PolyRenderer3D {
                         cameraX, camWorldH, cameraZ, sinAngle, cosAngle,
                         248, 0, true, screenBuffer
                     );
+                    transparentTexHoles = wasTrans;
                 }
             }
         }
@@ -622,6 +641,9 @@ public final class PolyRenderer3D {
         int baseShade = muzzleFlash ? 256 : 228;
         int tint = muzzleFlash ? 0x203008 : 0;
 
+        // All weapon PNGs may have alpha holes (user will paint them)
+        boolean needTransparent = weaponModel != null && weaponModel.texData != null;
+        transparentTexHoles = needTransparent;
         for (int k = 0; k < visCount; k++) {
             int t = visTriIdx[k];
             int i0 = tV0[t] & 0xFF;
@@ -635,6 +657,7 @@ public final class PolyRenderer3D {
 
             drawModelTriangle(weaponModel, t, i0, i1, i2, shade, tint, false, screenBuffer);
         }
+        transparentTexHoles = false;
     }
 
     /**
@@ -656,14 +679,24 @@ public final class PolyRenderer3D {
             mode = SHADE_FLAT;
         }
         if (mode == SHADE_TEXTURE) {
-            int fallback = applyShadeAndTint(model.triFlatRGB[t], totalShade, tintRGB);
-            fillTriangleTextured(
-                scrX[i0], scrY[i0], model.triU[t * 3] & 0xFF, model.triV[t * 3] & 0xFFFF,
-                scrX[i1], scrY[i1], model.triU[t * 3 + 1] & 0xFF, model.triV[t * 3 + 1] & 0xFFFF,
-                scrX[i2], scrY[i2], model.triU[t * 3 + 2] & 0xFF, model.triV[t * 3 + 2] & 0xFFFF,
-                model.texData, model.texH, texRGB, totalShade, fallback, tintRGB,
-                usePortalClips, screenBuffer
-            );
+            if (transparentTexHoles) {
+                fillTriangleTexturedTransparent(
+                    scrX[i0], scrY[i0], model.triU[t * 3] & 0xFF, model.triV[t * 3] & 0xFFFF,
+                    scrX[i1], scrY[i1], model.triU[t * 3 + 1] & 0xFF, model.triV[t * 3 + 1] & 0xFFFF,
+                    scrX[i2], scrY[i2], model.triU[t * 3 + 2] & 0xFF, model.triV[t * 3 + 2] & 0xFFFF,
+                    model.texData, model.texH, texRGB, totalShade, tintRGB,
+                    usePortalClips, screenBuffer
+                );
+            } else {
+                int fallback = applyShadeAndTint(model.triFlatRGB[t], totalShade, tintRGB);
+                fillTriangleTextured(
+                    scrX[i0], scrY[i0], model.triU[t * 3] & 0xFF, model.triV[t * 3] & 0xFFFF,
+                    scrX[i1], scrY[i1], model.triU[t * 3 + 1] & 0xFF, model.triV[t * 3 + 1] & 0xFFFF,
+                    scrX[i2], scrY[i2], model.triU[t * 3 + 2] & 0xFF, model.triV[t * 3 + 2] & 0xFFFF,
+                    model.texData, model.texH, texRGB, totalShade, fallback, tintRGB,
+                    usePortalClips, screenBuffer
+                );
+            }
         } else if (mode == SHADE_VERTEX_PAINT) {
             int c0 = applyShadeAndTint(model.triVertRGB0[t], totalShade, tintRGB);
             int c1 = applyShadeAndTint(model.triVertRGB1[t], totalShade, tintRGB);
@@ -793,6 +826,162 @@ public final class PolyRenderer3D {
                 if (g > 255) g = 255;
                 if (b > 255) b = 255;
                 buf[rowOffset + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+    // Transparent variant for first-person weapon: texel 0/255 are holes that keep background visible
+    private static void drawTexSpanTransparent(int[] buf, int rowOffset, int xs, int xe, int y,
+                                    int uCur, int uStep, int vCur, int vStep,
+                                    byte[] tex, int maxV, int[] lut,
+                                    boolean usePortalClips, short[] floorClip, short[] ceilClip) {
+        if (!usePortalClips) {
+            for (int x = xs; x <= xe; x++) {
+                int vi = vCur >> 16;
+                if (vi < 0) vi = 0; else if (vi > maxV) vi = maxV;
+                int idx = tex[(vi << 6) + ((uCur >> 16) & 63)] & 0xFF;
+                if (idx != 0 && idx != 255) {
+                    buf[rowOffset + x] = lut[idx];
+                }
+                uCur += uStep;
+                vCur += vStep;
+            }
+        } else {
+            for (int x = xs; x <= xe; x++) {
+                if (y >= floorClip[x] && y <= ceilClip[x]) {
+                    int vi = vCur >> 16;
+                    if (vi < 0) vi = 0; else if (vi > maxV) vi = maxV;
+                    int idx = tex[(vi << 6) + ((uCur >> 16) & 63)] & 0xFF;
+                    if (idx != 0 && idx != 255) {
+                        buf[rowOffset + x] = lut[idx];
+                    }
+                }
+                uCur += uStep;
+                vCur += vStep;
+            }
+        }
+    }
+
+    private static void drawTexSpanShadedTransparent(int[] buf, int rowOffset, int xs, int xe, int y,
+                                          int uCur, int uStep, int vCur, int vStep,
+                                          byte[] tex, int maxV, int[] palRGB, int shade256,
+                                          int tintRGB,
+                                          boolean usePortalClips, short[] floorClip, short[] ceilClip) {
+        int tintR = (tintRGB >> 16) & 0xFF, tintG = (tintRGB >> 8) & 0xFF, tintB = tintRGB & 0xFF;
+        for (int x = xs; x <= xe; x++, uCur += uStep, vCur += vStep) {
+            if (usePortalClips && (y < floorClip[x] || y > ceilClip[x])) continue;
+            int vi = vCur >> 16;
+            if (vi < 0) vi = 0; else if (vi > maxV) vi = maxV;
+            int idx = tex[(vi << 6) + ((uCur >> 16) & 63)] & 0xFF;
+            if (idx == 0 || idx == 255) continue;
+            int p = palRGB[idx];
+            int r = (((p >> 16) & 0xFF) * shade256 >> 8) + tintR;
+            int g = (((p >> 8) & 0xFF) * shade256 >> 8) + tintG;
+            int b = ((p & 0xFF) * shade256 >> 8) + tintB;
+            if (r > 255) r = 255;
+            if (g > 255) g = 255;
+            if (b > 255) b = 255;
+            buf[rowOffset + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+        }
+    }
+
+    private static void fillTriangleTexturedTransparent(
+            int x0, int y0, int u0, int v0,
+            int x1, int y1, int u1, int v1,
+            int x2, int y2, int u2, int v2,
+            byte[] tex, int texH, int[] palRGB, int shade256, int tintRGB,
+            boolean usePortalClips, int[] screenBuffer) {
+        if (texH <= 0) return;
+        if (y0 > y1) {
+            int t = x0; x0 = x1; x1 = t; t = y0; y0 = y1; y1 = t;
+            t = u0; u0 = u1; u1 = t; t = v0; v0 = v1; v1 = t;
+        }
+        if (y1 > y2) {
+            int t = x1; x1 = x2; x2 = t; t = y1; y1 = y2; y2 = t;
+            t = u1; u1 = u2; u2 = t; t = v1; v1 = v2; v2 = t;
+        }
+        if (y0 > y1) {
+            int t = x0; x0 = x1; x1 = t; t = y0; y0 = y1; y1 = t;
+            t = u0; u0 = u1; u1 = t; t = v0; v0 = v1; v1 = t;
+        }
+        int totalH = y2 - y0;
+        if (totalH <= 0) return;
+        int startY = y0 < 0 ? 0 : y0;
+        int endY = y2 >= PortalRenderer.VIEWPORT_HEIGHT ? PortalRenderer.VIEWPORT_HEIGHT - 1 : y2;
+        if (startY > endY) return;
+        boolean useLut = totalH >= TEX_LUT_MIN_ROWS;
+        // For transparent we can use a dummy fallback (not used for holes)
+        int dummyFallback = 0;
+        int[] lut = useLut ? buildShadeLut(palRGB, shade256, tintRGB, dummyFallback) : null;
+        short[] floorClip = Sector.floorClip;
+        short[] ceilClip = Sector.ceilingClip;
+        int width = PortalRenderer.VIEWPORT_WIDTH;
+        int maxV = texH - 1;
+        long lxS = ((long) (x2 - x0) << 16) / totalH;
+        long luS = ((long) (u2 - u0) << 16) / totalH;
+        long lvS = ((long) (v2 - v0) << 16) / totalH;
+        int seg1H = y1 - y0;
+        long s1xS = 0, s1uS = 0, s1vS = 0;
+        if (seg1H > 0) {
+            s1xS = ((long) (x1 - x0) << 16) / seg1H;
+            s1uS = ((long) (u1 - u0) << 16) / seg1H;
+            s1vS = ((long) (v1 - v0) << 16) / seg1H;
+        }
+        int seg2H = y2 - y1;
+        long s2xS = 0, s2uS = 0, s2vS = 0;
+        if (seg2H > 0) {
+            s2xS = ((long) (x2 - x1) << 16) / seg2H;
+            s2uS = ((long) (u2 - u1) << 16) / seg2H;
+            s2vS = ((long) (v2 - v1) << 16) / seg2H;
+        }
+        for (int y = startY; y <= endY; y++) {
+            int dy = y - y0;
+            long xa16 = ((long) x0 << 16) + lxS * dy;
+            long ua16 = ((long) u0 << 16) + luS * dy;
+            long va16 = ((long) v0 << 16) + lvS * dy;
+            long xb16, ub16, vb16;
+            if (y <= y1) {
+                if (seg1H > 0) {
+                    xb16 = ((long) x0 << 16) + s1xS * dy;
+                    ub16 = ((long) u0 << 16) + s1uS * dy;
+                    vb16 = ((long) v0 << 16) + s1vS * dy;
+                } else {
+                    xb16 = (long) x1 << 16;
+                    ub16 = (long) u1 << 16;
+                    vb16 = (long) v1 << 16;
+                }
+            } else {
+                int dys = y - y1;
+                xb16 = ((long) x1 << 16) + s2xS * dys;
+                ub16 = ((long) u1 << 16) + s2uS * dys;
+                vb16 = ((long) v1 << 16) + s2vS * dys;
+            }
+            int xa = (int) (xa16 >> 16);
+            int xb = (int) (xb16 >> 16);
+            if (xa > xb) {
+                int t = xa; xa = xb; xb = t;
+                long lt = ua16; ua16 = ub16; ub16 = lt;
+                lt = va16; va16 = vb16; vb16 = lt;
+            }
+            if (xb < 0 || xa >= width) continue;
+            int spanW = xb - xa;
+            int uStep = spanW > 0 ? (int) ((ub16 - ua16) / spanW) : 0;
+            int vStep = spanW > 0 ? (int) ((vb16 - va16) / spanW) : 0;
+            int uCur = (int) ua16;
+            int vCur = (int) va16;
+            int xs = xa;
+            if (xs < 0) {
+                uCur += uStep * (-xs);
+                vCur += vStep * (-xs);
+                xs = 0;
+            }
+            int xe = xb >= width ? width - 1 : xb;
+            if (useLut) {
+                drawTexSpanTransparent(screenBuffer, y * width, xs, xe, y, uCur, uStep, vCur, vStep,
+                        tex, maxV, lut, usePortalClips, floorClip, ceilClip);
+            } else {
+                drawTexSpanShadedTransparent(screenBuffer, y * width, xs, xe, y, uCur, uStep, vCur, vStep,
+                        tex, maxV, palRGB, shade256, tintRGB, usePortalClips, floorClip, ceilClip);
             }
         }
     }
