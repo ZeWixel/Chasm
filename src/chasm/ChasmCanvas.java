@@ -106,10 +106,17 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         int h = getHeight();
         if (w <= 0) w = 240;
         if (h <= 0) h = 320;
-        if (w != scrW || h != scrH) {
+        // The status bar is two rows: 16 px icons on top and one text line below.
+        // Size it from the real font height, otherwise the weapon name (and the
+        // key/enemy line) is clipped by the screen edge on S60 devices.
+        Font hudFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
+        int hudFontH = hudFont.getHeight();
+        int wantedHudH = Math.max(16, hudFontH) + hudFontH + 2;
+        if (wantedHudH < 24) wantedHudH = 24;
+        if (w != scrW || h != scrH || wantedHudH != hudH) {
             scrW = w;
             scrH = h;
-            hudH = (h >= 240) ? 32 : 24;
+            hudH = wantedHudH;
             viewW = w;
             viewH = h - hudH;
             if (viewW != PortalRenderer.VIEWPORT_WIDTH || viewH != PortalRenderer.VIEWPORT_HEIGHT) {
@@ -522,8 +529,34 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             }
         }
 
+        // 4b. Collected key cards in the top-right corner of the 3D view
+        drawKeyChips(g, topY + 18);
+
         // 5. Draw Chasm bottom status bar HUD
         drawStatusBar(g, smallFont);
+    }
+
+    /**
+     * Three small colour chips (R/G/B) for the key cards the player carries, in the
+     * top-right corner of the 3D view. Nothing is drawn for keys not collected.
+     */
+    private void drawKeyChips(Graphics g, int y) {
+        int chipW = 9, chipH = 7, gap = 3;
+        int x = scrW - 2 - chipW;
+        if (world.hasBlueKey) {
+            g.setColor(0x2244CC); g.fillRect(x, y, chipW, chipH);
+            g.setColor(0x8899FF); g.drawRect(x, y, chipW - 1, chipH - 1);
+            x -= chipW + gap;
+        }
+        if (world.hasGreenKey) {
+            g.setColor(0x22AA44); g.fillRect(x, y, chipW, chipH);
+            g.setColor(0x99FF99); g.drawRect(x, y, chipW - 1, chipH - 1);
+            x -= chipW + gap;
+        }
+        if (world.hasRedKey) {
+            g.setColor(0xCC2222); g.fillRect(x, y, chipW, chipH);
+            g.setColor(0xFF9999); g.drawRect(x, y, chipW - 1, chipH - 1);
+        }
     }
 
     private void drawStatusBar(Graphics g, Font font) {
@@ -535,20 +568,27 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.drawRect(0, barY, scrW - 1, hudH - 1);
         g.setFont(font);
         int fh = font.getHeight();
-        boolean icons = hudH >= 32 && UiAssets.iconHp != null;
-        int textOff = icons ? (16 - fh) >> 1 : 0;
+        // Top row: 16 px icons, but never shorter than the font (some S60 fonts are 17-18 px).
+        int rowH = Math.max(16, fh);
+        boolean icons = UiAssets.iconHp != null;
+        int textOff = icons ? Math.max(0, (rowH - fh) >> 1) : 0;
+        int iconOff = Math.max(0, (rowH - 16) >> 1);
+        // Vertical offset of the second row (weapon / enemies) inside the remaining
+        // space below the icon row. hudH is sized for it in ensureBuffers().
+        int botOff = icons ? Math.max(0, (hudH - rowH - fh) >> 1) : 0;
         // HUD redesign (closer to original PC screenshot image-4):
         // Top row (y = barY): HP | Armor | Ammo in one row (three equal columns)
         // Bottom row (y = barY+16): Weapon name (left half) | Enemies remaining (right half)
         // No LEVEL display in HUD — level is shown in pause menu.
         if (icons) {
             int rowTop = barY;
-            int rowBot = barY + 16;
+            int rowBot = barY + rowH;
             int slotW = scrW / 3;
             // Top row: HP / Armor / Ammo centered in each third
             String hpStr = String.valueOf(world.health);
             String arStr = String.valueOf(world.armor);
-            String amStr = String.valueOf(world.ammo[world.curWeapon]);
+            // The rifle (slot 0) has unlimited ammo, like in the original game.
+            String amStr = (world.curWeapon == 0) ? "INF" : String.valueOf(world.ammo[world.curWeapon]);
             // Slot 0: HP
             {
                 int tw = font.stringWidth(hpStr);
@@ -556,7 +596,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 int cx = slotW >> 1;
                 int left = cx - (contentW >> 1);
                 g.setColor(world.health <= 25 ? 0xFF4444 : 0xFFCC44);
-                g.drawRGB(UiAssets.iconHp, 0, 16, left, rowTop, 16, 16, true);
+                g.drawRGB(UiAssets.iconHp, 0, 16, left, rowTop + iconOff, 16, 16, true);
                 g.drawString(hpStr, left + 20, rowTop + textOff, Graphics.TOP | Graphics.LEFT);
             }
             // Slot 1: Armor
@@ -566,7 +606,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 int cx = slotW + (slotW >> 1);
                 int left = cx - (contentW >> 1);
                 g.setColor(0x88CCFF);
-                g.drawRGB(UiAssets.iconAr, 0, 16, left, rowTop, 16, 16, true);
+                g.drawRGB(UiAssets.iconAr, 0, 16, left, rowTop + iconOff, 16, 16, true);
                 g.drawString(arStr, left + 20, rowTop + textOff, Graphics.TOP | Graphics.LEFT);
             }
             // Slot 2: Ammo
@@ -576,28 +616,29 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 int cx = (slotW * 2) + (slotW >> 1);
                 int left = cx - (contentW >> 1);
                 g.setColor(0xD8D8C8);
-                g.drawRGB(UiAssets.iconAmmo, 0, 16, left, rowTop, 16, 16, true);
+                g.drawRGB(UiAssets.iconAmmo, 0, 16, left, rowTop + iconOff, 16, 16, true);
                 g.drawString(amStr, left + 20, rowTop + textOff, Graphics.TOP | Graphics.LEFT);
             }
             // Bottom row: weapon name on left half, enemy count on right half
             g.setColor(0xFFE066);
-            g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], scrW >> 2, rowBot + textOff, Graphics.TOP | Graphics.HCENTER);
+            g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], scrW >> 2, rowBot + botOff, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0xFF9988);
-            g.drawString("ENEMIES: " + countEnemiesAlive(), (scrW * 3) >> 2, rowBot + textOff, Graphics.TOP | Graphics.HCENTER);
+            g.drawString("ENEMIES: " + countEnemiesAlive(), (scrW * 3) >> 2, rowBot + botOff, Graphics.TOP | Graphics.HCENTER);
             // Thin divider between top and bottom rows
             g.setColor(0x786434);
             g.drawLine(0, rowBot, scrW, rowBot);
         } else {
             // Compact (no icons): top row 3 values text, bottom row 2 values
-            int rowTop = barY + 2;
-            int rowBot = barY + 14;
+            int rowTop = barY + 1;
+            int rowBot = rowTop + fh;
             int slotW = scrW / 3;
             g.setColor(world.health <= 25 ? 0xFF4444 : 0xFFCC44);
             g.drawString(String.valueOf(world.health), slotW >> 1, rowTop, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0x88CCFF);
             g.drawString(String.valueOf(world.armor), slotW + (slotW >> 1), rowTop, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0xD8D8C8);
-            g.drawString(String.valueOf(world.ammo[world.curWeapon]), (slotW * 2) + (slotW >> 1), rowTop, Graphics.TOP | Graphics.HCENTER);
+            String ammoText = (world.curWeapon == 0) ? "INF" : String.valueOf(world.ammo[world.curWeapon]);
+            g.drawString(ammoText, (slotW * 2) + (slotW >> 1), rowTop, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0xFFE066);
             g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], scrW >> 2, rowBot, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0xFF9988);
