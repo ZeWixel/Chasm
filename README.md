@@ -285,6 +285,14 @@ without `entities4.bin` the runtime has nothing to load for it.
 
 ## Known limitations
 
+- **Wall layout is approximate.** The C3B compiler decides which cells are open from the
+  floor grid alone (`floors < 62`) and turns wall objects into sector textures, not solid
+  geometry. Cells that carry a wall object but still have a floor texture are therefore
+  compiled as floor (323 / 156 / 556 cells in MAP.01 / MAP.05 / MAP.06), so some of the
+  original internal walls are missing and rooms can merge. Treating those cells as solid
+  is the next geometry task; it changes sector/wall counts and must be re-validated
+  against the spawn, keys, items and monsters.
+
 - **Campaign coverage is incomplete.** The `CSM.BIN` used by this build contains only the map bundles `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99` (`MAP.99` is the briefing background, not a playable mission). The game has three playable levels from the data. Episode 1 "The CondemNATION" needs `MAP.01`–`MAP.04` (Power Station, Military Base, Underground Base, Pit of Sarcophagus), and `MAP.02`–`MAP.04` are absent. Levels 2–3 are therefore not the Episode 1 missions; they are the data that exists. Level names come from each map's `RESOURCE` (`#name`). The briefing texts are short neutral descriptions, not the original scripts.
 
 - Only links (proximity, floor, toggle, return, destroy on the gate lock), `unlock` chains, doors, gates (`up`) and moving platforms are executed from `PROCESS.XX`. `shoot` links (walls), rotating parts (see Doors), lights and animations are not.
