@@ -858,22 +858,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     wall_slot, default_wall, flat_slot, default_flat = build_level_materials(
         level_idx, map_num, mdata, rdata, floors, ceils)
 
-    # Parse static 3O model filenames from RESOURCE.XX
-    model_files = {}
     lines = [l.strip() for l in rdata.splitlines()]
-    i = 0
-    while i < len(lines) and ";Models" not in lines[i]:
-        i += 1
-    i += 1
-    m_idx = 0
-    while i < len(lines) and ";Walls" not in lines[i]:
-        line = lines[i]
-        if line and not line.startswith(";"):
-            parts = line.split()
-            if len(parts) >= 10:
-                model_files[m_idx] = parts[9].upper()
-            m_idx += 1
-        i += 1
 
     # The retail RESOURCE.XX has no ";Models" section: its map-specific 3D objects are
     # listed in "#newobjects" as [GoRad Shad BObj BMPz AC Blw BLmt SFX BSfx File Ani],
@@ -965,7 +950,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
                 if local_item is not None:
                     raw_items.append((local_item, wx0, wy0))
             elif 163 <= tid < 227:
-                mfname = model_files.get(tid - 163, "")
+                mfname = object_models.get(tid - 163, "")
                 obj_name = object_models.get(tid - 163, "")
                 obj_acode = object_acodes.get(tid - 163, 0)
                 cx, cy = max(0, min(63, int(wx0))), max(0, min(63, int(wy0)))
@@ -1186,25 +1171,44 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     valid_monsters = valid_monsters[:24]
 
     valid_items = []
-    # Keys first: the 28-item cap and the reachability filter must never drop a key,
-    # otherwise a locked door can never be opened.
-    for itype, fx, fy in raw_keys:
+
+    def add_item(itype, fx, fy):
         valid_items.append((itype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE)))
-    for itype, fx, fy in raw_items:
-        if (int(fx), int(fy)) in visited:
-            valid_items.append((itype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE)))
-    # Fall back to a synthetic pickup only for something the map does not contain at all
-    # (local model ids: every weapon, then health/armour/ammo). Duplicates are not added.
-    present_items = set(t for t, _x, _z in valid_items)
+
+    # 1. Keys first: the item cap must never drop one.
+    for itype, fx, fy in raw_keys:
+        add_item(itype, fx, fy)
+
+    # 2. Then the first real instance of every essential pickup (all five weapons,
+    #    health, armour, helmet, mega health, ammo), so a level is always playable with
+    #    the full arsenal even when its 40+ medkits/ammo boxes would fill the cap.
     essential_items = [22, 23, 24, 25, 26, 17, 19, 21, 18, 20]
+    live_items = []
+    for idx_i, (itype, fx, fy) in enumerate(raw_items):
+        if (int(fx), int(fy)) in visited:
+            live_items.append((idx_i, itype, fx, fy))
+    added_indexes = set()
+    present_types = set()
+    for idx_i, itype, fx, fy in live_items:
+        if itype in essential_items and itype not in present_types:
+            add_item(itype, fx, fy)
+            added_indexes.add(idx_i)
+            present_types.add(itype)
+
+    # 3. A synthetic pickup only for an essential type the map does not contain at all.
     for idx_e, itype in enumerate(essential_items):
-        if itype in present_items:
+        if itype in present_types:
             continue
         if idx_e < len(sector_centers):
             cx, cy = sector_centers[(idx_e * 2 + 1) % len(sector_centers)]
             valid_items.append((itype, int((cx - 32.0) * SCALE) + 16, int((cy - 32.0) * SCALE) - 16))
-            present_items.add(itype)
-    valid_items = valid_items[:28]
+            present_types.add(itype)
+
+    # 4. Everything else the map really has: duplicate weapons, medkits, ammo boxes.
+    for idx_i, itype, fx, fy in live_items:
+        if idx_i not in added_indexes:
+            add_item(itype, fx, fy)
+    valid_items = valid_items[:48]
 
     valid_props = []
     for ptype, fx, fy, pang in raw_props:
@@ -1252,9 +1256,9 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 
 
 def build_all_levels():
-    compile_chasm_map_to_c3b(1, 1, max_cells=256)
-    compile_chasm_map_to_c3b(2, 5, max_cells=256)
-    compile_chasm_map_to_c3b(3, 6, max_cells=256)
+    compile_chasm_map_to_c3b(1, 1, max_cells=1024)
+    compile_chasm_map_to_c3b(2, 5, max_cells=1024)
+    compile_chasm_map_to_c3b(3, 6, max_cells=1024)
     # MAP.99 is the briefing background (not playable), so only three playable maps are built.
 
 

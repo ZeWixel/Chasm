@@ -179,7 +179,7 @@ dry the game switches back to the rifle instead of inventing ammo. An ammo pack 
 (`CHASM.INF` `DAm`). The map compiler writes `models.bin` pickups 17..29 in exactly this
 order and maps the original item ids (`map texture 131..162`) to them; key cards are
 static `.3O` models with `ACode` 141/142/143 and are compiled into the item list first,
-so the 28-item cap can never drop a key. In the shipped data level 1 has the green key
+so the 48-item cap can never drop a key. In the shipped data level 1 has the green key
 (`G_CARD.3O`, `MAP.01`), and levels 2–3 have the red key (`KEY.3O`, `MAP.05`/`MAP.06`).
 
 The HUD shows collected keys as small red/green/blue chips under the message banner in
@@ -253,23 +253,32 @@ Not implemented: `shoot` links, `light`, `playani`, `waitout`, `death`, and vert
 - **Blocking and pushing:** the box blocks the player and monsters like a static prop. When the box moves onto the player or a live monster, that entity is shoved to the box's leading face. The shove is skipped if the target point has no sector, and the box pushout then acts instead.
 - **Deviation:** nothing rides the platform. The original's `GetFloorLevel` ignores dynamic models, so the player is not carried by a platform; the platform only blocks and pushes.
 
-Each level is compiled from a **256-cell flood fill** around the spawn cell
-(`compile_chasm_map_to_c3b(..., max_cells=256)`), not from the whole map: the current
-build has 23, 51 and 35 sectors and 97, 210 and 150 walls for levels 1–3. Monsters, items
-and props are placed only inside that compiled area, so a map's outer rooms never appear.
+Each level is compiled from a **1024-cell flood fill** around the spawn cell
+(`compile_chasm_map_to_c3b(..., max_cells=1024)`), not from the whole map: the current
+build has 138, 83 and 172 sectors and 507, 338 and 721 walls for levels 1–3, with
+`bsp_err=0`. Monsters, items and props are placed only inside that compiled area, so a
+map's outer rooms can still be missing. The cap is the first thing to raise if a level
+feels cut off (or lower if a device runs out of memory): one constant per level call.
+Changing it re-compiles `level*.c3b` and `entities*.bin`.
 
 ## Levels
 
 The `CSM.BIN` used by this build has four maps: `MAP.01`, `MAP.05`, `MAP.06` and `MAP.99`. `MAP.99` is the briefing background, so it is not a level. The playable levels are:
 
-| Level | Map | Name (from `RESOURCE`) | Pickups | Key |
-|---|---|---|---|---|
-| 1 | MAP.01 | Power Station | 14 | green, model 28 (`G_CARD.3O`) |
-| 2 | MAP.05 | Around Pyramids | 28 | red, model 27 (`KEY.3O`) |
-| 3 | MAP.06 | Pyramid of Shmuher | 15 | red, model 27 (`KEY.3O`) |
+| Level | Map | Name (from `RESOURCE`) | Sectors / walls | Pickups | Monsters | Key |
+|---|---|---|---|---|---|---|
+| 1 | MAP.01 | Power Station | 138 / 507 | 32 | 21 | green, model 28 (`G_CARD.3O`) |
+| 2 | MAP.05 | Around Pyramids | 83 / 338 | 48 | 24 | red, model 27 (`KEY.3O`) |
+| 3 | MAP.06 | Pyramid of Shmuher | 172 / 721 | 40 | 24 | red, model 27 (`KEY.3O`) |
+
+Each level gets all five weapons, body armour, helmet, mega health, a medkit and an ammo
+pack before the remaining slots are filled with the map's own duplicate weapons, medkits
+and ammo boxes, so the item cap can never remove a weapon the level needs. Pickups are
+taken from the real `MAP.xx` placements; when a map has no instance of an essential type at
+all, the compiler adds one synthetic pickup in a sector centre.
 
 Keys are regular pickups (models 27 red, 28 green, 29 blue) and are written into the
-item list **before** any other pickup, so the 28-item cap can never drop one. The legacy
+item list **before** any other pickup, so the 48-item cap can never drop one. The legacy
 level 4 builder (`parse_legacy_map` / `compile_legacy_level`, `tools/legacy/map3.bin`)
 still exists but is not called by `build_all_levels()` and no `level4.c3b` is shipped;
 without `entities4.bin` the runtime has nothing to load for it.
