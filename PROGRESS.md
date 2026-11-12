@@ -4,6 +4,21 @@
 > Ресурсы пересобраны из `CSM.BIN` (`python3 tools/build_assets.py`), т.к. в `CSM.BIN` есть
 > `CHASM.INF` с настоящими `[3D_OBJECTS]`/`[WEAPONS]`.
 
+## W595: geometry and flat-model follow-up
+
+- On `ea45aff`, user measured X=-1776/Z=-1200: TX FULL (12°) 5 FPS,
+  R/G/E/Q~/S/D=149/68/59/1/6/6 ms and leaves/walls/models 85/386/32;
+  FL FAST (18°) 9 FPS, 67/30/32/1/9/7 and 85/386/34; FL FAST SF (25°)
+  9 FPS, 69/27/37/3/9/6 and 85/386/36. Q~ is an estimate; views differ.
+  Scaling is much lower than the preceding snapshots (22–24 ms), with estimated
+  lookup around 1–3 ms. World vertex transform rounded to 0–1 ms.
+- Empty portal columns no longer compute perspective wall-texture coordinates
+  or wall light unless an upper/lower wall is drawn; all span/clip updates remain.
+- FLAT model triangles advance their edge positions incrementally using the same
+  fixed-point slopes and reset at the middle vertex. No deliberate visual change.
+- Reference images match across 1,448 world/portal comparisons and 12,000 synthetic
+  flat triangle cases. Actual W595 speed/visual result for this build is unmeasured.
+
 ## W595: measured scaling and entity lookup optimisation
 
 - Latest device images at X=-1776/Z=-1200: TX, angle 6°, 5 FPS,

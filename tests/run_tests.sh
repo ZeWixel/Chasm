@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Headless regression tests for the pickup/weapon/key system.
+# Headless regression tests for pickups, visibility and rendering.
 # Builds the suite first (releases/ChasmTheRift.jar), then runs the tests on the JDK 8
 # that build.sh downloaded, with the J2ME stub classes on the classpath.
 set -euo pipefail
@@ -21,7 +21,7 @@ mkdir -p "${OUT_DIR}"
     -d "${OUT_DIR}" tests/chasm/*.java
 
 status=0
-for t in PickupTest LevelItemTest KeyPosTest RenderProfileTest ViewportScalerTest EntityBucketsTest; do
+for t in PickupTest LevelItemTest KeyPosTest RenderProfileTest ViewportScalerTest EntityBucketsTest FlatRasterTest; do
     echo "=== ${t} ==="
     if ! "${JDK_HOME}/bin/java" -cp "${OUT_DIR}:releases/ChasmTheRift.jar:${BOOT_CP}" "chasm.${t}"; then
         status=1

@@ -14,7 +14,7 @@ public final class RenderProfileTest {
     }
     public static void main(String[] args) {
         GameWorld w = new GameWorld();
-        int comparisons = 0, rejected = 0;
+        int comparisons = 0, rejected = 0, portalComparisons = 0;
         // Check the safety margin used by tools/pvs.py against every shipped
         // animated mesh, including limbs at their larger runtime scale.
         Model3D[] allModels = Model3D.loadAllModels("/models.bin");
@@ -68,6 +68,11 @@ public final class RenderProfileTest {
                     w.getRootBSPNode().calculateVisibleSectors();
                     int[] with = render(w);
                     if (leaf % 3 == 0 && point == 0 && angle % 2 == 0) {
+                        PortalRenderer.skipEmptyPortalTextureMath = false;
+                        int[] originalPortalMath = render(w);
+                        PortalRenderer.skipEmptyPortalTextureMath = true;
+                        require(Arrays.equals(with, originalPortalMath), "portal math mismatch: level " + level + " leaf " + leaf + " angle " + angle);
+                        portalComparisons++;
                         w.polyRenderer.useSectorBuckets = false;
                         int[] unbucketed = render(w);
                         w.polyRenderer.useSectorBuckets = true;
@@ -85,6 +90,32 @@ public final class RenderProfileTest {
             }
         }
         require(rejected > 0, "PVS rejected nothing");
+        require(portalComparisons > 0, "portal reference was not tested");
+        // Exercise the portal optimisation with both resolutions, all shade
+        // modes, flat floors and muzzle flash in each shipped level.
+        for (int level = 0; level < GameWorld.NUM_LEVELS; level++) {
+            w.loadLevel(level);
+            for (int fast = 0; fast < 2; fast++) {
+                PortalRenderer.setFastResolution(fast != 0);
+                for (int flat = 0; flat < 2; flat++) {
+                    PortalRenderer.flatSurfaces = flat != 0;
+                    for (int shade = 0; shade < 4; shade++) {
+                        w.polyRenderer.shadingMode = shade;
+                        for (int flash = 0; flash < 2; flash++) {
+                            w.muzzleFlashTimer = flash;
+                            PortalRenderer.skipEmptyPortalTextureMath = true;
+                            int[] optimized = render(w);
+                            PortalRenderer.skipEmptyPortalTextureMath = false;
+                            int[] reference = render(w);
+                            require(Arrays.equals(optimized, reference), "portal mode mismatch");
+                            portalComparisons++;
+                        }
+                    }
+                }
+            }
+        }
+        w.muzzleFlashTimer = 0;
+        PortalRenderer.skipEmptyPortalTextureMath = true;
         for (int pass = 0; pass < 4; pass++) {
             boolean fast = (pass & 1) == 0;
             PortalRenderer.setFastResolution(fast);
@@ -120,6 +151,7 @@ public final class RenderProfileTest {
         require(sampled > 0, "no entity scan samples");
         PortalRenderer.flatSurfaces = false;
         PortalRenderer.profiling = false;
-        System.out.println("PVS render comparisons=" + comparisons + " rejected=" + rejected + "; resolution/flat/shading OK");
+        System.out.println("PVS render comparisons=" + comparisons + " rejected=" + rejected
+                + "; portal reference comparisons=" + portalComparisons + "; resolution/flat/shading OK");
     }
 }

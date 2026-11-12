@@ -1210,34 +1210,42 @@ public final class PolyRenderer3D {
         int seg2H = y2 - y1;
         long s2S = seg2H > 0 ? ((long) (x2 - x1) << 16) / seg2H : 0;
 
+        // Initialize once at the first visible row. Advancing by the exact
+        // fixed-point slope avoids two long multiplications per scanline.
+        long xa16 = ((long)x0 << 16) + lxS * (startY - y0);
+        long xb16 = startY <= y1
+                ? (seg1H > 0 ? ((long)x0 << 16) + s1S * (startY - y0) : (long)x1 << 16)
+                : ((long)x1 << 16) + s2S * (startY - y1);
         for (int y = startY; y <= endY; y++) {
-            int dy = y - y0;
-            long xa16 = ((long) x0 << 16) + lxS * dy;
-            long xb16;
-            if (y <= y1) {
-                xb16 = seg1H > 0 ? ((long) x0 << 16) + s1S * dy : (long) x1 << 16;
-            } else {
-                xb16 = ((long) x1 << 16) + s2S * (y - y1);
-            }
-
             int xa = (int) (xa16 >> 16);
             int xb = (int) (xb16 >> 16);
             if (xa > xb) { int t = xa; xa = xb; xb = t; }
-            if (xb < 0 || xa >= width) continue;
-            if (xa < 0) xa = 0;
-            if (xb >= width) xb = width - 1;
+            if (xb >= 0 && xa < width) {
+                if (xa < 0) xa = 0;
+                if (xb >= width) xb = width - 1;
 
-            int rowOffset = y * width;
-            if (usePortalClips) {
-                for (int x = xa; x <= xb; x++) {
-                    if (y >= floorClip[x] && y <= ceilClip[x]) {
+                int rowOffset = y * width;
+                if (usePortalClips) {
+                    for (int x = xa; x <= xb; x++) {
+                        if (y >= floorClip[x] && y <= ceilClip[x]) {
+                            screenBuffer[rowOffset + x] = color;
+                        }
+                    }
+                } else {
+                    for (int x = xa; x <= xb; x++) {
                         screenBuffer[rowOffset + x] = color;
                     }
                 }
+            }
+            xa16 += lxS;
+            if (y == y1) {
+                // Restart at x1: the rounded first-edge slope need not land
+                // exactly on the shared vertex.
+                xb16 = ((long)x1 << 16) + s2S;
+            } else if (y < y1) {
+                xb16 += s1S;
             } else {
-                for (int x = xa; x <= xb; x++) {
-                    screenBuffer[rowOffset + x] = color;
-                }
+                xb16 += s2S;
             }
         }
     }

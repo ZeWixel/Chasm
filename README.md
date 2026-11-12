@@ -245,8 +245,14 @@ For a useful comparison on the same device and build, disable music/SFX; stand a
 one position and face the same direction for at least several seconds, note FPS and
 all four timings/counters, then repeat with FAST on and optionally FLAT FLOORS on.
 Repeat in a corridor, in a large view, and with several enemies. A desktop result is
-not a substitute for the phone: the latest scaling and bucket changes have not yet
-been measured on W595. On the previous build, the user measured at X=-1776,
+not a substitute for the phone: the latest portal and triangle changes have not yet
+been measured on W595. After the scaling and bucket changes, the user measured at
+X=-1776, Z=-1200: TX FULL at 12° showed 5 FPS, R/G/E/Q~/S/D =
+149/68/59/1/6/6 ms, 85 leaves, 386 walls and 32 models; FL FAST at 18° showed
+9 FPS, 67/30/32/1/9/7 ms and 85/386/34; FL FAST SF at 25° showed 9 FPS,
+69/27/37/3/9/6 ms and 85/386/36. These are snapshots at different angles, not a
+controlled benchmark. In particular, Q~ is a noisy estimate and V rounded to 0–1 ms.
+On the preceding build, the user measured at X=-1776,
 Z=-1200: TEXTURE at 6° showed 5 FPS, R/G/E/Q~/S/D=149/68/59/6/24/6 ms,
 85 leaves, 386 walls, 29 models; FLAT at 12° showed 8 FPS,
 68/30/34/3/22/7 ms and 85/386/31; FLAT with flat floors at 18° showed 8 FPS,
@@ -270,6 +276,11 @@ or entity pop-in appears, report the level, coordinates and direction.
 
 ## Performance notes
 
+- Empty portal columns skip perspective texture and lighting calculations when no
+  upper or lower wall is drawn. Floor, sky and clip updates still run normally.
+- FLAT model triangles advance fixed-point edges by addition per scanline, instead
+  of recalculating them with long multiplication. Image equivalence is tested against
+  the previous rasterizer; actual W595 impact has not yet been measured.
 - Viewport scaling copies repeated output rows and uses bulk copies for identical
   widths or a specialised 2× horizontal path. It produces the same nearest-neighbour
   pixels as the general map-based path; speed depends on the device's `arraycopy`.

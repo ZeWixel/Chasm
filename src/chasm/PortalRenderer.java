@@ -109,6 +109,8 @@ public class PortalRenderer {
 
     public static boolean flatSurfaces = false;
     public static boolean profiling = false;
+    // Package-private reference switch for pixel-exact portal regression tests.
+    static boolean skipEmptyPortalTextureMath = true;
     public static int profileLeaves, profileWalls, profileModels;
     // Per-frame breakdown, measured only in DEV MODE.
     public static int profileVertexMs, profileGeometryMs, profileEntitiesMs;
@@ -949,32 +951,34 @@ public class PortalRenderer {
 
         for (int column = clippedStartX; column <= clippedEndX; column++) {
             if (floorClip[column] < ceilingClip[column]) {
-                // Calculate perspective-correct texture coordinate
-                long columnOffset64 = (long)(column - startX << 16);
-                long depthNumerator = (long)startDepth * columnOffset64;
-                long depthTotal = depthDenominator + columnOffset64 * depthRange;
-                int textureU = (int)(depthNumerator / (depthTotal >> 16));
+                int effectiveLightLevel = 0;
+                int textureColumn = 0;
+                // An open portal with no upper or lower wall has no wall texel
+                // to sample. Its floor/sky spans still use the normal path below.
+                if (!skipEmptyPortalTextureMath || ceilingY < upperBottomY || lowerTopY < floorY) {
+                    long columnOffset64 = (long)(column - startX << 16);
+                    long depthNumerator = (long)startDepth * columnOffset64;
+                    long depthTotal = depthDenominator + columnOffset64 * depthRange;
+                    int textureU = (int)(depthNumerator / (depthTotal >> 16));
 
-                // Calculate light level with depth attenuation
-                int depthFactor = (int)((long)startDepth - depthRangeShifted * (long)textureU >> 22);
-                int effectiveLightLevel;
-                if (gunFireLighting && depthFactor < 3) {
-                    effectiveLightLevel = lightLevel + (4 >> depthFactor);
-                } else {
-                    effectiveLightLevel = lightLevel - depthFactor;
-                }
-                if (effectiveLightLevel < 0) {
-                    effectiveLightLevel = 0;
-                } else if (effectiveLightLevel > 15) {
-                    effectiveLightLevel = 15;
+                    int depthFactor = (int)((long)startDepth - depthRangeShifted * (long)textureU >> 22);
+                    if (gunFireLighting && depthFactor < 3) {
+                        effectiveLightLevel = lightLevel + (4 >> depthFactor);
+                    } else {
+                        effectiveLightLevel = lightLevel - depthFactor;
+                    }
+                    if (effectiveLightLevel < 0) {
+                        effectiveLightLevel = 0;
+                    } else if (effectiveLightLevel > 15) {
+                        effectiveLightLevel = 15;
+                    }
+                    textureColumn = ((int)((long)textureU * (long)textureRangeU >> 16) + textureStartU) >> 16;
                 }
 
                 int screenCeilingY = ceilingY >> 16;
                 int screenUpperBottomY = upperBottomY >> 16;
                 int screenLowerTopY = lowerTopY >> 16;
                 int screenFloorY = floorY >> 16;
-
-                int textureColumn = ((int)((long)textureU * (long)textureRangeU >> 16) + textureStartU) >> 16;
 
                 // Update ceiling span if portal exists
                 if (lowerTopY >= floorY && ceilingTexture != null) {
