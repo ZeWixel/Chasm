@@ -112,7 +112,7 @@ public class PortalRenderer {
     public static int profileLeaves, profileWalls, profileModels;
     // Per-frame breakdown, measured only in DEV MODE.
     public static int profileVertexMs, profileGeometryMs, profileEntitiesMs;
-    public static int profileScanMs, profileScanSamples, profileScanCursor, profileScanPhase;
+    public static int profileScanMs, profileScanSamples, profileScanCursor, profileScanPhase, profileBucketMs;
 
     /** Reconfigure only on the render thread, between frames. */
     public static void setFastResolution(boolean fast) {
@@ -614,7 +614,7 @@ public class PortalRenderer {
     static void renderWorld(int playerX, int playerY, int playerZ, int playerAngle) {
         profileLeaves = profileWalls = profileModels = 0;
         profileVertexMs = profileGeometryMs = profileEntitiesMs = 0;
-        profileScanMs = profileScanSamples = profileScanCursor = 0;
+        profileScanMs = profileScanSamples = profileScanCursor = profileBucketMs = 0;
         if (profiling) profileScanPhase = (profileScanPhase + 1) & 3;
         long start = profiling ? System.currentTimeMillis() : 0;
         Point2D[] transformedVertices = LevelLoader.gameWorld.transformVertices(playerX, playerZ, playerAngle);
@@ -678,6 +678,14 @@ public class PortalRenderer {
             long now = System.currentTimeMillis();
             profileGeometryMs = (int)(now - start);
             start = now;
+        }
+
+        // Build per-leaf entity lists once, after simulation and before drawing.
+        PolyRenderer3D entities = LevelLoader.gameWorld.polyRenderer;
+        if (entities != null && entities.useSectorBuckets) {
+            long bucketStart = profiling ? System.currentTimeMillis() : 0;
+            entities.prepareSectorBuckets(LevelLoader.gameWorld);
+            if (profiling) profileBucketMs = (int)(System.currentTimeMillis() - bucketStart);
         }
 
         // Render dynamic objects in back-to-front order

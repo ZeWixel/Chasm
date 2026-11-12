@@ -67,6 +67,12 @@ public final class RenderProfileTest {
                         System.arraycopy(saved[i], 0, w.sectors[i].visitedFlags, 0, saved.length);
                     w.getRootBSPNode().calculateVisibleSectors();
                     int[] with = render(w);
+                    if (leaf % 3 == 0 && point == 0 && angle % 2 == 0) {
+                        w.polyRenderer.useSectorBuckets = false;
+                        int[] unbucketed = render(w);
+                        w.polyRenderer.useSectorBuckets = true;
+                        require(Arrays.equals(with, unbucketed), "bucket image mismatch: level " + level + " leaf " + leaf + " angle " + angle);
+                    }
                     for (int i = 0; i < saved.length; i++) Arrays.fill(w.sectors[i].visitedFlags, false);
                     w.getRootBSPNode().calculateVisibleSectors();
                     int[] without = render(w);

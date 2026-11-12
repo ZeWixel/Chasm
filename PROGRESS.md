@@ -4,6 +4,22 @@
 > Ресурсы пересобраны из `CSM.BIN` (`python3 tools/build_assets.py`), т.к. в `CSM.BIN` есть
 > `CHASM.INF` с настоящими `[3D_OBJECTS]`/`[WEAPONS]`.
 
+## W595: measured scaling and entity lookup optimisation
+
+- Latest device images at X=-1776/Z=-1200: TX, angle 6°, 5 FPS,
+  R/G/E/Q~/S/D 149/68/59/6/24/6 ms, 85/386/29 leaves/walls/models; FL,
+  angle 12°, 8 FPS, 68/30/34/3/22/7, 85/386/31; FL with flat floors,
+  angle 18°, 8 FPS, 67/28/35/8/22/7, 85/386/33. V rounded to 0 ms in all.
+  The old overlay does not show the selected resolution.
+- Scaling reuses repeated rows and has 1× and 2× horizontal paths; 32,404 size
+  combinations are pixel-identical to the original nearest-neighbour formula.
+- Entity slots are grouped per leaf every frame, preserving category/index order;
+  tests compare the reference renderer, movement/activation, depth ties and the
+  96-entity cap. Q~ includes bucket setup plus sampled/extrapolated lookups.
+- World vertex transforms remain unchanged: measured V rounded to zero. This build
+  has not been tested on W595, so actual FPS and visual correctness remain unverified.
+  DEV overlay now displays FAST/FULL and SF, allowing unambiguous comparisons.
+
 ## W595 measurements: detailed profiling
 
 - User photos at X=-1776 Z=-1200: TX 4 FPS, L/R/B/F 0/158/29/3 ms,

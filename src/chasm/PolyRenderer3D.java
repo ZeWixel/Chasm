@@ -117,6 +117,54 @@ public final class PolyRenderer3D {
         return models[id];
     }
 
+    // Lists are indexed by original entity slots. Iterating source slots in
+    // reverse preserves the old category/slot order for equal-depth ties.
+    private final int[] nextMon = new int[GameWorld.MAX_MONSTERS];
+    private final int[] nextLimb = new int[GameWorld.MAX_LIMBS];
+    private final int[] nextItem = new int[GameWorld.MAX_ITEMS];
+    private final int[] nextProp = new int[GameWorld.MAX_PROPS];
+    private final int[] nextProj = new int[GameWorld.MAX_PROJ];
+    // Package-private reference path retained for pixel-exact regression tests.
+    boolean useSectorBuckets = true;
+
+    void prepareSectorBuckets(GameWorld world) {
+        for (int i = 0; i < world.bspSectors.length; i++) {
+            Sector s = world.bspSectors[i];
+            s.renderMonHead = s.renderLimbHead = s.renderItemHead = -1;
+            s.renderPropHead = s.renderProjHead = -1;
+        }
+        for (int i = world.monCount - 1; i >= 0; i--) {
+            Sector s = world.monSector[i];
+            if (s != null && world.monState[i] != GameWorld.MSTATE_INACTIVE) {
+                nextMon[i] = s.renderMonHead; s.renderMonHead = i;
+            }
+        }
+        for (int i = GameWorld.MAX_LIMBS - 1; i >= 0; i--) {
+            Sector s = world.limbSector[i];
+            if (s != null && world.limbActive[i]) {
+                nextLimb[i] = s.renderLimbHead; s.renderLimbHead = i;
+            }
+        }
+        for (int i = world.itemCount - 1; i >= 0; i--) {
+            Sector s = world.itemSector[i];
+            if (s != null && world.itemActive[i]) {
+                nextItem[i] = s.renderItemHead; s.renderItemHead = i;
+            }
+        }
+        for (int i = world.propCount - 1; i >= 0; i--) {
+            Sector s = world.propSector[i];
+            if (s != null && world.propActive[i]) {
+                nextProp[i] = s.renderPropHead; s.renderPropHead = i;
+            }
+        }
+        for (int i = GameWorld.MAX_PROJ - 1; i >= 0; i--) {
+            Sector s = world.projSector[i];
+            if (s != null && world.projActive[i]) {
+                nextProj[i] = s.renderProjHead; s.renderProjHead = i;
+            }
+        }
+    }
+
     /**
      * Called by PortalRenderer during its back-to-front sector pass.
      * Sector.floorClip[x] and Sector.ceilingClip[x] already hold the exact
@@ -140,7 +188,8 @@ public final class PolyRenderer3D {
         int count = 0;
 
         // 1. Collect Monsters in this sector
-        for (int i = 0; i < world.monCount && count < 96; i++) {
+        for (int i = useSectorBuckets ? sector.renderMonHead : 0; i >= 0 && i < world.monCount && count < 96;
+                i = useSectorBuckets ? nextMon[i] : i + 1) {
             if (world.monState[i] == GameWorld.MSTATE_INACTIVE) continue;
             if (world.monSector[i] != sector) continue;
             int rx = world.monX[i] - cameraX;
@@ -155,7 +204,8 @@ public final class PolyRenderer3D {
         }
 
         // 2. Collect Detached Body Parts (severed limbs/heads from dismemberment)
-        for (int i = 0; i < GameWorld.MAX_LIMBS && count < 96; i++) {
+        for (int i = useSectorBuckets ? sector.renderLimbHead : 0; i >= 0 && i < GameWorld.MAX_LIMBS && count < 96;
+                i = useSectorBuckets ? nextLimb[i] : i + 1) {
             if (!world.limbActive[i]) continue;
             if (world.limbSector[i] != sector) continue;
             int rx = world.limbX[i] - cameraX;
@@ -170,7 +220,8 @@ public final class PolyRenderer3D {
         }
 
         // 3. Collect 3D Items (pickups)
-        for (int i = 0; i < world.itemCount && count < 96; i++) {
+        for (int i = useSectorBuckets ? sector.renderItemHead : 0; i >= 0 && i < world.itemCount && count < 96;
+                i = useSectorBuckets ? nextItem[i] : i + 1) {
             if (!world.itemActive[i]) continue;
             if (world.itemSector[i] != sector) continue;
             int rx = world.itemX[i] - cameraX;
@@ -185,7 +236,8 @@ public final class PolyRenderer3D {
         }
 
         // 4. Collect 3D Props (barrels, crates, columns)
-        for (int i = 0; i < world.propCount && count < 96; i++) {
+        for (int i = useSectorBuckets ? sector.renderPropHead : 0; i >= 0 && i < world.propCount && count < 96;
+                i = useSectorBuckets ? nextProp[i] : i + 1) {
             if (!world.propActive[i]) continue;
             if (world.propSector[i] != sector) continue;
             int rx = world.propX[i] - cameraX;
@@ -200,7 +252,8 @@ public final class PolyRenderer3D {
         }
 
         // 5. Collect Projectiles & Gibs
-        for (int i = 0; i < GameWorld.MAX_PROJ && count < 96; i++) {
+        for (int i = useSectorBuckets ? sector.renderProjHead : 0; i >= 0 && i < GameWorld.MAX_PROJ && count < 96;
+                i = useSectorBuckets ? nextProj[i] : i + 1) {
             if (!world.projActive[i]) continue;
             if (world.projSector[i] != sector) continue;
             int rx = world.projX[i] - cameraX;

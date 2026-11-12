@@ -223,16 +223,17 @@ frame. `L` = game logic, `R` = complete 3D world/models/effects, `B` = viewport
 scaling plus `drawRGB`, `F` = `flushGraphics`, all in milliseconds. `LEAF` counts
 BSP leaves actually processed, `WALL` counts wall segments submitted from those
 leaves (not necessarily visible), and `MODEL` counts models submitted after the
-coarse view test, including the view weapon. HUD drawing, other UI work, the frame
+coarse view test, including the view weapon. The FPS row also shows `FAST`/`FULL`
+resolution and `SF` when flat surfaces are enabled. HUD drawing, other UI work, the frame
 sleep, and profiler overhead are outside these four timings. Device clocks may have
 coarse granularity, and `flushGraphics` timing may not include display work queued
 by the phone. The next row breaks down `R`: `V` = transforming world vertices;
 `G` = BSP traversal, walls, floor/ceiling and their setup; `E` = sector entity pass,
 including lookup, sorting, clip restoration and drawing models. The view weapon and
 some effects are included in `R` but not `E`. `Q~` estimates the lookup portion of
-`E`: one rotating quarter of leaf scans is timed and extrapolated to all processed
-leaves. It is noisy on coarse clocks, can be zero, and is not an additional cost to
-add to `E`. `S` = scaling and `D` = the remainder of `B` (mainly `drawRGB`).
+`E`: the one-time per-frame sector-bucket build plus a rotating quarter of leaf
+lookups extrapolated to all processed leaves. It is noisy on coarse clocks, can be
+zero, and is not an additional cost to add to `E`. `S` = scaling and `D` = the remainder of `B` (mainly `drawRGB`).
 Rounding means the displayed components need not sum exactly.
 
 All these timings include some instrumentation overhead. In particular, `Q~` adds
@@ -244,7 +245,13 @@ For a useful comparison on the same device and build, disable music/SFX; stand a
 one position and face the same direction for at least several seconds, note FPS and
 all four timings/counters, then repeat with FAST on and optionally FLAT FLOORS on.
 Repeat in a corridor, in a large view, and with several enemies. A desktop result is
-not a substitute for the phone: the expanded profiler has not been measured on W595.
+not a substitute for the phone: the latest scaling and bucket changes have not yet
+been measured on W595. On the previous build, the user measured at X=-1776,
+Z=-1200: TEXTURE at 6° showed 5 FPS, R/G/E/Q~/S/D=149/68/59/6/24/6 ms,
+85 leaves, 386 walls, 29 models; FLAT at 12° showed 8 FPS,
+68/30/34/3/22/7 ms and 85/386/31; FLAT with flat floors at 18° showed 8 FPS,
+67/28/35/8/22/7 ms and 85/386/33. All three displayed V=0 ms (rounded), which
+does not mean zero cost. Resolution/profile cannot be inferred from those overlays.
 The previous build was measured by the user at X=-1776, Z=-1200: TEXTURE at angle
 353° showed 4 FPS, L/R/B/F=0/158/29/3 ms, 85 leaves, 386 walls, 23 models; FLAT
 at 0° showed 8 FPS, 0/68/29/3 ms and 85/386/26; FLAT with flat floors at 6° showed
@@ -262,6 +269,14 @@ prove that every camera position, moving entity or device is artifact-free. If w
 or entity pop-in appears, report the level, coordinates and direction.
 
 ## Performance notes
+
+- Viewport scaling copies repeated output rows and uses bulk copies for identical
+  widths or a specialised 2× horizontal path. It produces the same nearest-neighbour
+  pixels as the general map-based path; speed depends on the device's `arraycopy`.
+- Active entities are grouped by BSP leaf once per frame before the entity pass,
+  rather than scanning every entity array for every leaf. Per-type slot order is
+  preserved, including equal-depth ties and the 96-entity leaf limit. `Q~` includes
+  the bucket setup time, so old and new measurements can be compared approximately.
 
 - Sound effects are played by a background audio worker with cached, pre-realized players. The frame loop never calls `Manager.createPlayer()` or `realize()`, which removed the shot micro-stalls on S60 / Sony Ericsson phones.
 - Projectile weapons (BladeGun disc, Laser Crossbow bolt, Grenader grenade) damage only on impact (no duplicate hitscan).

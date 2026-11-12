@@ -64,7 +64,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private int previousShade = PolyRenderer3D.SHADE_VERTEX_PAINT;
     private int frameRenderMs, frameBlitMs, frameScaleMs;
     private long sumLogic, sumRender, sumBlit, sumFlush, sumScale;
-    private long sumVertex, sumGeometry, sumEntities, sumScans;
+    private long sumVertex, sumGeometry, sumEntities, sumScans, sumBuckets;
     private int scanSamples;
     private int sumLeaves, sumWalls, sumModels, profileFrames;
     private int avgLogic, avgRender, avgBlit, avgFlush, avgLeaves, avgWalls, avgModels;
@@ -183,6 +183,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                     sumGeometry += PortalRenderer.profileGeometryMs;
                     sumEntities += PortalRenderer.profileEntitiesMs;
                     sumScans += PortalRenderer.profileScanMs;
+                    sumBuckets += PortalRenderer.profileBucketMs;
                     scanSamples += PortalRenderer.profileScanSamples;
                     sumFlush += afterFlush - beforeFlush;
                     sumLeaves += PortalRenderer.profileLeaves;
@@ -210,14 +211,15 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                     avgGeometry = (int)(sumGeometry / profileFrames);
                     avgEntities = (int)(sumEntities / profileFrames);
                     // Extrapolate sampled leaf scan time to all processed leaves.
-                    avgScan = scanSamples > 0 ? (int)(sumScans * sumLeaves / ((long)scanSamples * profileFrames)) : 0;
+                    avgScan = (int)(sumBuckets / profileFrames);
+                    if (scanSamples > 0) avgScan += (int)(sumScans * sumLeaves / ((long)scanSamples * profileFrames));
                     avgScale = (int)(sumScale / profileFrames);
                     avgDraw = (int)((sumBlit - sumScale) / profileFrames);
                     if (avgDraw < 0) avgDraw = 0;
                 }
                 profileFrames = sumLeaves = sumWalls = sumModels = 0;
                 sumLogic = sumRender = sumBlit = sumFlush = sumScale = 0;
-                sumVertex = sumGeometry = sumEntities = sumScans = 0;
+                sumVertex = sumGeometry = sumEntities = sumScans = sumBuckets = 0;
                 scanSamples = 0;
                 frameCounter = 0;
                 fpsTimer = now;
@@ -368,17 +370,8 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                     scaleYRow[y] = ((y * srcH) / viewH) * srcW;
                 }
             }
-            int[] src = PortalRenderer.screenBuffer;
-            int[] dst = scaledBuf;
-            int[] xMap = scaleXMap;
-            int[] yRow = scaleYRow;
-            for (int y = 0; y < viewH; y++) {
-                int srcRow = yRow[y];
-                int dstRow = y * viewW;
-                for (int x = 0; x < viewW; x++) {
-                    dst[dstRow + x] = src[srcRow + xMap[x]];
-                }
-            }
+            ViewportScaler.scale(PortalRenderer.screenBuffer, scaledBuf,
+                    srcW, viewW, viewH, scaleXMap, scaleYRow);
             if (PortalRenderer.profiling) frameScaleMs = (int)(System.currentTimeMillis() - scaleStart);
             g.drawRGB(scaledBuf, 0, viewW, 0, 0, viewW, viewH, false);
         }
@@ -763,7 +756,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 + " A:" + deg, 3, 2, Graphics.TOP | Graphics.LEFT);
         g.setColor(0x98B890);
         g.drawString("FPS:" + fpsDisplay + " LIMBS:" + world.limbsSevered + " "
-                + SHADE_TAGS[world.polyRenderer.shadingMode & 3], 3, 2 + fh, Graphics.TOP | Graphics.LEFT);
+                + SHADE_TAGS[world.polyRenderer.shadingMode & 3]
+                + (appliedFastProfile ? " FAST" : " FULL") + (PortalRenderer.flatSurfaces ? " SF" : ""),
+                3, 2 + fh, Graphics.TOP | Graphics.LEFT);
         g.drawString("L:" + avgLogic + " R:" + avgRender + " B:" + avgBlit + " F:" + avgFlush + " ms",
                 3, 2 + fh * 2, Graphics.TOP | Graphics.LEFT);
         g.drawString("LEAF:" + avgLeaves + " WALL:" + avgWalls + " MODEL:" + avgModels,
