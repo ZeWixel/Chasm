@@ -21,7 +21,7 @@ mkdir -p "${OUT_DIR}"
     -d "${OUT_DIR}" tests/chasm/*.java
 
 status=0
-for t in PickupTest LevelItemTest KeyPosTest RenderProfileTest ViewportScalerTest EntityBucketsTest FlatRasterTest; do
+for t in PickupTest LevelItemTest KeyPosTest RenderProfileTest ViewportScalerTest EntityBucketsTest FlatRasterTest WallFrustumTest; do
     echo "=== ${t} ==="
     if ! "${JDK_HOME}/bin/java" -cp "${OUT_DIR}:releases/ChasmTheRift.jar:${BOOT_CP}" "chasm.${t}"; then
         status=1

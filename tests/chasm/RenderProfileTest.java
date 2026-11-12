@@ -69,8 +69,10 @@ public final class RenderProfileTest {
                     int[] with = render(w);
                     if (leaf % 3 == 0 && point == 0 && angle % 2 == 0) {
                         PortalRenderer.skipEmptyPortalTextureMath = false;
+                        PortalRenderer.earlyWallFrustumReject = false;
                         int[] originalPortalMath = render(w);
                         PortalRenderer.skipEmptyPortalTextureMath = true;
+                        PortalRenderer.earlyWallFrustumReject = true;
                         require(Arrays.equals(with, originalPortalMath), "portal math mismatch: level " + level + " leaf " + leaf + " angle " + angle);
                         portalComparisons++;
                         w.polyRenderer.useSectorBuckets = false;
@@ -104,8 +106,10 @@ public final class RenderProfileTest {
                         for (int flash = 0; flash < 2; flash++) {
                             w.muzzleFlashTimer = flash;
                             PortalRenderer.skipEmptyPortalTextureMath = true;
+                            PortalRenderer.earlyWallFrustumReject = true;
                             int[] optimized = render(w);
                             PortalRenderer.skipEmptyPortalTextureMath = false;
+                            PortalRenderer.earlyWallFrustumReject = false;
                             int[] reference = render(w);
                             require(Arrays.equals(optimized, reference), "portal mode mismatch");
                             portalComparisons++;
@@ -116,6 +120,7 @@ public final class RenderProfileTest {
         }
         w.muzzleFlashTimer = 0;
         PortalRenderer.skipEmptyPortalTextureMath = true;
+        PortalRenderer.earlyWallFrustumReject = true;
         for (int pass = 0; pass < 4; pass++) {
             boolean fast = (pass & 1) == 0;
             PortalRenderer.setFastResolution(fast);

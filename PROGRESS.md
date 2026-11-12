@@ -4,6 +4,21 @@
 > Ресурсы пересобраны из `CSM.BIN` (`python3 tools/build_assets.py`), т.к. в `CSM.BIN` есть
 > `CHASM.INF` с настоящими `[3D_OBJECTS]`/`[WEAPONS]`.
 
+## W595: early wall frustum rejection
+
+- Photos of `b74c81a` at X=-1776/Z=-1200: TX FULL (6°) 5 FPS,
+  R/G/E/Q~/S/D=149/71/56/2/6/7 ms and leaves/walls/models 85/386/29;
+  FL FAST (12°) 10 FPS, 63/29/30/1/9/6 and 85/386/31; FL FAST SF (18°)
+  10 FPS, 62/27/32/1/9/6 and 85/386/33. Angles and model counts differ from
+  the preceding snapshots, so individual changes cannot be credited reliably.
+- Reject segments wholly outside a side plane before texture-length calculation
+  only when both endpoints are on or in front of the near plane; crossings use
+  the original clipping path. No deliberate visual change. Device impact is unknown.
+- The direct reference test checks 104,978 boundary/random cases in both viewport
+  sizes, including near-plane and side-plane edges and integer extremes (excluding
+  overflowed MIN_VALUE deltas unsupported by the original fastHypot); 11,858 are
+  early-reject candidates. 1,448 sampled world frames also match the old path.
+
 ## W595: geometry and flat-model follow-up
 
 - On `ea45aff`, user measured X=-1776/Z=-1200: TX FULL (12°) 5 FPS,
@@ -17,7 +32,7 @@
 - FLAT model triangles advance their edge positions incrementally using the same
   fixed-point slopes and reset at the middle vertex. No deliberate visual change.
 - Reference images match across 1,448 world/portal comparisons and 12,000 synthetic
-  flat triangle cases. Actual W595 speed/visual result for this build is unmeasured.
+  flat triangle cases. The later phone snapshots above do not isolate its impact.
 
 ## W595: measured scaling and entity lookup optimisation
 

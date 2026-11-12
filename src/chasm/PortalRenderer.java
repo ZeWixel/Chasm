@@ -109,8 +109,9 @@ public class PortalRenderer {
 
     public static boolean flatSurfaces = false;
     public static boolean profiling = false;
-    // Package-private reference switch for pixel-exact portal regression tests.
+    // Package-private reference switches for pixel-exact renderer regression tests.
     static boolean skipEmptyPortalTextureMath = true;
+    static boolean earlyWallFrustumReject = true;
     public static int profileLeaves, profileWalls, profileModels;
     // Per-frame breakdown, measured only in DEV MODE.
     public static int profileVertexMs, profileGeometryMs, profileEntitiesMs;
@@ -275,6 +276,20 @@ public class PortalRenderer {
 
         if (startPoint.y <= NEAR_CLIP_DISTANCE && endPoint.y <= NEAR_CLIP_DISTANCE) {
             return false;
+        }
+
+        // When both endpoints are already in front of the near plane, a
+        // segment wholly outside either frustum half-plane cannot contribute.
+        // Reject it before the much more expensive texture-length calculation.
+        // Segments crossing the near plane still use the original clipping path.
+        if (earlyWallFrustumReject && startPoint.y >= NEAR_CLIP_DISTANCE
+                && endPoint.y >= NEAR_CLIP_DISTANCE) {
+            long left0 = (long)startPoint.y + startPoint.x;
+            long left1 = (long)endPoint.y + endPoint.x;
+            if (left0 < 0 && left1 < 0) return false;
+            long right0 = (long)startPoint.y - startPoint.x;
+            long right1 = (long)endPoint.y - endPoint.x;
+            if (right0 < 0 && right1 < 0) return false;
         }
 
         int textureStartU = textureOffset << 16;
