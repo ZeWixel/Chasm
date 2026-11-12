@@ -4,6 +4,24 @@
 > Ресурсы пересобраны из `CSM.BIN` (`python3 tools/build_assets.py`), т.к. в `CSM.BIN` есть
 > `CHASM.INF` с настоящими `[3D_OBJECTS]`/`[WEAPONS]`.
 
+## W595: model-work profiling and HUD armour restoration
+
+- User reports no FPS change from `62f2114` early wall rejection; no further wall
+  optimisation attempted. Current data does not justify world-vertex optimisation.
+- HUD armour art was inadvertently replaced in `c04034d` when resources were
+  regenerated. Restored the exact 256 palette indices from `ab6d63f` and keep them
+  in `tools/assets/hud_armor.idx`; the asset generator uses that source, while HP
+  and ammo retain their existing CEL crops. Tests cover source hash, packing and
+  HUD loading. A full asset regeneration reproduced the restored icon.
+- DEV overlay now displays `M~`: time in populated sectors after lookup, including
+  sort/setup and world model rendering, sampled across all such sectors on one in
+  four frames, averaged over sampled frames. It is part of `E`, excludes weapon,
+  lookup and clip restoration, and is not a pure rasterizer timer. A dash means no
+  sampled frame in the reporting interval. Clock granularity, profiling overhead and
+  differing frame samples make it approximate; this build is not yet tested on W595.
+- The next optimisation should be selected after measuring `M~` together with `E`
+  and `Q~`, not by treating the new metric as proof of a specific inner-loop cost.
+
 ## W595: early wall frustum rejection
 
 - Photos of `b74c81a` at X=-1776/Z=-1200: TX FULL (6°) 5 FPS,
@@ -13,7 +31,7 @@
   the preceding snapshots, so individual changes cannot be credited reliably.
 - Reject segments wholly outside a side plane before texture-length calculation
   only when both endpoints are on or in front of the near plane; crossings use
-  the original clipping path. No deliberate visual change. Device impact is unknown.
+  the original clipping path. No deliberate visual change. User reported no FPS change.
 - The direct reference test checks 104,978 boundary/random cases in both viewport
   sizes, including near-plane and side-plane edges and integer extremes (excluding
   overflowed MIN_VALUE deltas unsupported by the original fastHypot); 11,858 are

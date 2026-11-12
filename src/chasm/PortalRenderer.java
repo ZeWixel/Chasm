@@ -116,6 +116,9 @@ public class PortalRenderer {
     // Per-frame breakdown, measured only in DEV MODE.
     public static int profileVertexMs, profileGeometryMs, profileEntitiesMs;
     public static int profileScanMs, profileScanSamples, profileScanCursor, profileScanPhase, profileBucketMs;
+    // Sample model work for all populated leaves on one in four frames.
+    public static boolean profileModelSample;
+    public static int profileModelMs, profileModelLeaves;
 
     /** Reconfigure only on the render thread, between frames. */
     public static void setFastResolution(boolean fast) {
@@ -632,7 +635,12 @@ public class PortalRenderer {
         profileLeaves = profileWalls = profileModels = 0;
         profileVertexMs = profileGeometryMs = profileEntitiesMs = 0;
         profileScanMs = profileScanSamples = profileScanCursor = profileBucketMs = 0;
-        if (profiling) profileScanPhase = (profileScanPhase + 1) & 3;
+        profileModelMs = profileModelLeaves = 0;
+        profileModelSample = false;
+        if (profiling) {
+            profileScanPhase = (profileScanPhase + 1) & 3;
+            profileModelSample = profileScanPhase == 0;
+        }
         long start = profiling ? System.currentTimeMillis() : 0;
         Point2D[] transformedVertices = LevelLoader.gameWorld.transformVertices(playerX, playerZ, playerAngle);
         if (profiling) {

@@ -64,11 +64,12 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private int previousShade = PolyRenderer3D.SHADE_VERTEX_PAINT;
     private int frameRenderMs, frameBlitMs, frameScaleMs;
     private long sumLogic, sumRender, sumBlit, sumFlush, sumScale;
-    private long sumVertex, sumGeometry, sumEntities, sumScans, sumBuckets;
-    private int scanSamples;
+    private long sumVertex, sumGeometry, sumEntities, sumScans, sumBuckets, sumModelWork;
+    private int scanSamples, modelSampleFrames;
     private int sumLeaves, sumWalls, sumModels, profileFrames;
     private int avgLogic, avgRender, avgBlit, avgFlush, avgLeaves, avgWalls, avgModels;
     private int avgVertex, avgGeometry, avgEntities, avgScan, avgScale, avgDraw;
+    private int avgModelWork = -1;
 
     public boolean isFastProfile() { return fastProfile; }
     public int getPreviousShade() { return previousShade; }
@@ -185,6 +186,10 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                     sumScans += PortalRenderer.profileScanMs;
                     sumBuckets += PortalRenderer.profileBucketMs;
                     scanSamples += PortalRenderer.profileScanSamples;
+                    if (PortalRenderer.profileModelSample) {
+                        sumModelWork += PortalRenderer.profileModelMs;
+                        modelSampleFrames++;
+                    }
                     sumFlush += afterFlush - beforeFlush;
                     sumLeaves += PortalRenderer.profileLeaves;
                     sumWalls += PortalRenderer.profileWalls;
@@ -213,14 +218,15 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                     // Extrapolate sampled leaf scan time to all processed leaves.
                     avgScan = (int)(sumBuckets / profileFrames);
                     if (scanSamples > 0) avgScan += (int)(sumScans * sumLeaves / ((long)scanSamples * profileFrames));
+                    avgModelWork = modelSampleFrames > 0 ? (int)(sumModelWork / modelSampleFrames) : -1;
                     avgScale = (int)(sumScale / profileFrames);
                     avgDraw = (int)((sumBlit - sumScale) / profileFrames);
                     if (avgDraw < 0) avgDraw = 0;
                 }
                 profileFrames = sumLeaves = sumWalls = sumModels = 0;
                 sumLogic = sumRender = sumBlit = sumFlush = sumScale = 0;
-                sumVertex = sumGeometry = sumEntities = sumScans = sumBuckets = 0;
-                scanSamples = 0;
+                sumVertex = sumGeometry = sumEntities = sumScans = sumBuckets = sumModelWork = 0;
+                scanSamples = modelSampleFrames = 0;
                 frameCounter = 0;
                 fpsTimer = now;
             }
@@ -765,7 +771,8 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 3, 2 + fh * 3, Graphics.TOP | Graphics.LEFT);
         g.drawString("V:" + avgVertex + " G:" + avgGeometry + " E:" + avgEntities + " Q~:" + avgScan,
                 3, 2 + fh * 4, Graphics.TOP | Graphics.LEFT);
-        g.drawString("S:" + avgScale + " D:" + avgDraw + " ms", 3, 2 + fh * 5, Graphics.TOP | Graphics.LEFT);
+        g.drawString("S:" + avgScale + " D:" + avgDraw + " M~:" + (avgModelWork < 0 ? "-" : String.valueOf(avgModelWork)) + " ms",
+                3, 2 + fh * 5, Graphics.TOP | Graphics.LEFT);
         return h;
     }
 

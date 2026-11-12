@@ -34,6 +34,7 @@ CSM_BIN = "/tmp/ChasmTheRift/CSM.BIN"
 sys.path.insert(0, "/tmp/CovertOps3D-RE/scripts")
 import c3d2_core
 from pvs import build_pvs
+from hud_icons import build_hud_icons
 from png_to_bmp4 import to_indexed_15, write_bmp4
 
 os.makedirs(RES_DIR, exist_ok=True)
@@ -1523,27 +1524,11 @@ def build_ui_pack():
         f.write(ui_buf)
     print(f"[OK] Wrote ui.bin ({len(ui_buf)} bytes)")
 
-    # HUD status icons (16x16) cropped from the original CEL art:
-    #   HP   = marine face      (NSTAT.CEL, left panel)
-    #   AR   = silver armour ring (NSTAT.CEL, second panel)
-    #   AMMO = shotgun shells   (WICONS.CEL, first icon)
-    # Crop boxes are (x, y, w, h) in source pixels; sampled nearest-neighbour to 16x16.
-    icon_src = [
-        ("NSTAT.CEL", (5, 16, 24, 24)),
-        ("NSTAT.CEL", (107, 15, 24, 24)),
-        ("WICONS.CEL", (3, 3, 20, 20)),
-    ]
-    icon_buf = bytearray()
-    for cname, (cx, cy, cw, ch) in icon_src:
-        cdata = csm.read(cname)
-        _, sw, sh = struct.unpack("<3H", cdata[:6])
-        spix = cdata[800:800 + sw * sh]
-        icon_buf.extend(struct.pack(">HH", 16, 16))
-        for y in range(16):
-            sy = cy + (y * ch) // 16
-            for x in range(16):
-                sx = cx + (x * cw) // 16
-                icon_buf.append(spix[sy * sw + sx])
+    # The armour icon is custom art from the pre-c04034d HUD, not an NSTAT
+    # crop. Keep the indexed source so regenerating assets preserves it exactly.
+    with open(os.path.join(ROOT_DIR, "tools", "assets", "hud_armor.idx"), "rb") as f:
+        armor_icon = f.read()
+    icon_buf = build_hud_icons(csm.read, armor_icon)
     with open(os.path.join(RES_DIR, "hud_icons.bin"), "wb") as f:
         f.write(icon_buf)
     print(f"[OK] Wrote hud_icons.bin ({len(icon_buf)} bytes)")

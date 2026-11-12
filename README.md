@@ -232,13 +232,17 @@ by the phone. The next row breaks down `R`: `V` = transforming world vertices;
 including lookup, sorting, clip restoration and drawing models. The view weapon and
 some effects are included in `R` but not `E`. `Q~` estimates the lookup portion of
 `E`: the one-time per-frame sector-bucket build plus a rotating quarter of leaf
-lookups extrapolated to all processed leaves. It is noisy on coarse clocks, can be
-zero, and is not an additional cost to add to `E`. `S` = scaling and `D` = the remainder of `B` (mainly `drawRGB`).
-Rounding means the displayed components need not sum exactly.
+lookups extrapolated to all processed leaves. `M~` samples one in four frames and
+reports the average total for populated leaves after lookup: entity sorting/setup
+and world model processing/drawing, excluding clip restoration and the view weapon.
+`-` means the reporting interval had no sampled frame. Both estimates are noisy on
+coarse clocks and are already part of `E`, not additional costs. `S` = scaling and
+`D` = the remainder of `B` (mainly `drawRGB`). Rounding and different sample sets
+mean the displayed components need not sum exactly.
 
 All these timings include some instrumentation overhead. In particular, `Q~` adds
-clock calls per sampled leaf, so compare FPS with DEV MODE off when testing actual
-performance. FPS is measured over elapsed time, including the sleep. Movement and
+clock calls per sampled leaf, and `M~` times populated leaves on sampled frames,
+so compare FPS with DEV MODE off when testing actual performance. FPS is measured over elapsed time, including the sleep. Movement and
 game timers are still tied to frames.
 
 For a useful comparison on the same device and build, disable music/SFX; stand at
@@ -251,7 +255,7 @@ Z=-1200: TX FULL at 6° showed 5 FPS, R/G/E/Q~/S/D=149/71/56/2/6/7 ms,
 63/29/30/1/9/6 ms and 85/386/31; FL FAST SF at 18° showed 10 FPS,
 62/27/32/1/9/6 ms and 85/386/33. Views and model counts differ from prior
 snapshots, so they do not isolate the portal and triangle changes. Early wall
-rejection has not yet been measured on W595. After the scaling and bucket changes,
+rejection subsequently showed no FPS change according to the user on W595. After the scaling and bucket changes,
 the user measured at
 X=-1776, Z=-1200: TX FULL at 12° showed 5 FPS, R/G/E/Q~/S/D =
 149/68/59/1/6/6 ms, 85 leaves, 386 walls and 32 models; FL FAST at 18° showed
@@ -280,13 +284,17 @@ by itself eliminate most BSP work. The headless tests compare PVS on/off at mult
 prove that every camera position, moving entity or device is artifact-free. If wall
 or entity pop-in appears, report the level, coordinates and direction.
 
+The custom armour HUD icon is stored as 256 palette indices in
+`tools/assets/hud_armor.idx`. `build_assets.py` uses it when regenerating
+`res/hud_icons.bin` instead of replacing it with the old CEL crop.
+
 ## Performance notes
 
 - Wall segments wholly outside a horizontal frustum side are rejected before the
   texture-length calculation, but only when both endpoints are at or in front of the
   near plane. Near-plane crossings retain the original clipping path. Boundary and
   random clipping comparisons and sampled world-frame comparisons check equivalence;
-  device performance and visual behaviour still need testing.
+  the user reported no FPS change on W595; device visual testing is still useful.
 - Empty portal columns skip perspective texture and lighting calculations when no
   upper or lower wall is drawn. Floor, sky and clip updates still run normally.
 - FLAT model triangles advance fixed-point edges by addition per scanline, instead

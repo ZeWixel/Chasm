@@ -147,13 +147,19 @@ public final class RenderProfileTest {
             }
         }
         // Across four rotating sample phases, at least one leaf must be sampled.
-        int sampled = 0;
+        int sampled = 0, modelSampledFrames = 0, modelSampledLeaves = 0;
         PortalRenderer.profiling = true;
         for (int i = 0; i < 4; i++) {
             render(w);
             sampled += PortalRenderer.profileScanSamples;
+            if (PortalRenderer.profileModelSample) {
+                modelSampledFrames++;
+                modelSampledLeaves += PortalRenderer.profileModelLeaves;
+                require(PortalRenderer.profileModelMs >= 0, "negative model time");
+            } else require(PortalRenderer.profileModelLeaves == 0, "model sampling on wrong frame");
         }
         require(sampled > 0, "no entity scan samples");
+        require(modelSampledFrames == 1 && modelSampledLeaves > 0, "model work sampling");
         PortalRenderer.flatSurfaces = false;
         PortalRenderer.profiling = false;
         System.out.println("PVS render comparisons=" + comparisons + " rejected=" + rejected

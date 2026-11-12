@@ -15,7 +15,7 @@ public final class UiAssets {
     public static int[] tile;
     public static int hudW, hudH;
     public static int[] hud;
-    /** 16x16 status icons from /hud_icons.bin: HP (marine face), AR (armour ring), AMMO (shells). */
+    /** 16x16 status icons from /hud_icons.bin: HP (marine face), AR (custom armour icon), AMMO (shells). */
     public static final int ICON_SIZE = 16;
     public static int[] iconHp, iconAr, iconAmmo;
 

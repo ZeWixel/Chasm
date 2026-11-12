@@ -272,6 +272,7 @@ public final class PolyRenderer3D {
             PortalRenderer.profileScanSamples++;
         }
         if (count == 0) return;
+        long modelStart = PortalRenderer.profileModelSample ? System.currentTimeMillis() : 0;
 
         // Sort entities in this sector BACK-TO-FRONT (largest depth first)
         for (int i = 1; i < count; i++) {
@@ -411,6 +412,10 @@ public final class PolyRenderer3D {
         }
         } catch (RuntimeException e) {
             // A malformed entity must never freeze the frame: skip the rest of this sector.
+        }
+        if (PortalRenderer.profileModelSample) {
+            PortalRenderer.profileModelMs += (int)(System.currentTimeMillis() - modelStart);
+            PortalRenderer.profileModelLeaves++;
         }
     }
 
