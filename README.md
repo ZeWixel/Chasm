@@ -205,6 +205,45 @@ Monsters, detached limbs, weapons and props use `PolyRenderer3D` (no Z-buffer, p
 
 A hit flashes the enemy with an additive red glow for a few ticks instead of overwriting its colours.
 
+## W595 performance profile and measurements
+
+The **OPTIONS** menu contains two independent controls (also available from Pause):
+
+- **FAST PROFILE: ON** switches the internal 3D viewport from 240×288 to 120×144
+  and selects **FLAT** model shading. The view is nearest-neighbour scaled to the
+  screen. Switching it off restores the previous shading and full resolution.
+  Shading can still be changed independently while the profile is on. The profile,
+  shading and flat-surface setting are saved in RMS; older saves remain readable.
+- **FLAT FLOORS: ON** replaces textured floors and ceilings with a representative
+  lit colour. It works in either profile; walls and the sky remain textured.
+
+For profiling, turn on **DEV MODE** in the pause menu (it also enables god mode).
+While playing, the overlay updates about once per second with averages per sampled
+frame. `L` = game logic, `R` = complete 3D world/models/effects, `B` = viewport
+scaling plus `drawRGB`, `F` = `flushGraphics`, all in milliseconds. `LEAF` counts
+BSP leaves actually processed, `WALL` counts wall segments submitted from those
+leaves (not necessarily visible), and `MODEL` counts models submitted after the
+coarse view test, including the view weapon. HUD drawing, other UI work, the frame
+sleep, and profiler overhead are outside these four timings. Device clocks may have
+coarse granularity, and `flushGraphics` timing may not include display work queued
+by the phone. Profiling itself has a small cost. FPS is measured over elapsed time,
+including the sleep. Movement and game timers are still tied to frames.
+
+For a useful comparison on the same device and build, disable music/SFX; stand at
+one position and face the same direction for at least several seconds, note FPS and
+all four timings/counters, then repeat with FAST on and optionally FLAT FLOORS on.
+Repeat in a corridor, in a large view, and with several enemies. A desktop result is
+not a substitute for the phone: no W595 timing has yet been measured for this build.
+
+PVS now conservatively rejects pairs only when immutable solid boundary segments
+completely separate expanded sector bounding boxes and cover every possible ray
+between them. The two-cell margin protects model extents in the shipped data; portals
+are never considered occluders. This is intentionally conservative: the current levels
+reject 1220/19044, 388/6889 and 2198/29584 sector pairs, respectively, so it will not
+by itself eliminate most BSP work. The headless tests compare PVS on/off at multiple points and angles, but do not
+prove that every camera position, moving entity or device is artifact-free. If wall
+or entity pop-in appears, report the level, coordinates and direction.
+
 ## Performance notes
 
 - Sound effects are played by a background audio worker with cached, pre-realized players. The frame loop never calls `Manager.createPlayer()` or `realize()`, which removed the shot micro-stalls on S60 / Sony Ericsson phones.

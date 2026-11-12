@@ -11,6 +11,7 @@ OUT_DIR="/tmp/chasm_tests"
 BOOT_CP="${SUITE_DIR}/uei/cldc11.jar:${SUITE_DIR}/uei/midp21.jar:${SUITE_DIR}/uei/nokiaui.jar:${SUITE_DIR}/uei/jsr135.jar"
 
 cd "${ROOT_DIR}"
+python3 tests/test_pvs.py
 ./build.sh
 
 rm -rf "${OUT_DIR}"
@@ -20,7 +21,7 @@ mkdir -p "${OUT_DIR}"
     -d "${OUT_DIR}" tests/chasm/*.java
 
 status=0
-for t in PickupTest LevelItemTest KeyPosTest; do
+for t in PickupTest LevelItemTest KeyPosTest RenderProfileTest; do
     echo "=== ${t} ==="
     if ! "${JDK_HOME}/bin/java" -cp "${OUT_DIR}:releases/ChasmTheRift.jar:${BOOT_CP}" "chasm.${t}"; then
         status=1

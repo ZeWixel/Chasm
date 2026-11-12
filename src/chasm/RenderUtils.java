@@ -152,7 +152,7 @@ public final class RenderUtils {
 
         int halfViewportHeight = PortalRenderer.HALF_VIEWPORT_HEIGHT;
         int viewportHeight = PortalRenderer.VIEWPORT_HEIGHT;
-        boolean texturedFlats = true;
+        boolean texturedFlats = !PortalRenderer.flatSurfaces;
 
         // Legacy naming is vertically inverted: these upper screen spans are
         // the physical ceiling but use SectorData.floorTexture. Keep that

@@ -33,6 +33,7 @@ CSM_BIN = "/tmp/ChasmTheRift/CSM.BIN"
 
 sys.path.insert(0, "/tmp/CovertOps3D-RE/scripts")
 import c3d2_core
+from pvs import build_pvs
 from png_to_bmp4 import to_indexed_15, write_bmp4
 
 os.makedirs(RES_DIR, exist_ok=True)
@@ -1144,6 +1145,18 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     lvl.objects = [dict(x=px_c3d, z=pz_c3d, angle=c3d_ang, type=1, param=0)]
 
     report = c3d2_core.LEGACY.rebuild_derived(lvl, validate=True)
+    # Only immutable, solid C3B boundaries qualify as occluders. Never use
+    # portals/doors here: a PVS must remain valid when they open.
+    solid = []
+    for wall in walls:
+        if wall["back"] == -1 and wall["flags"] & 1:
+            ax, ay = vertices[wall["sv"]]
+            bx, by = vertices[wall["ev"]]
+            solid.append((ax // SCALE + 32, ay // SCALE + 32,
+                          bx // SCALE + 32, by // SCALE + 32))
+    lvl.pvs = build_pvs(rects, solid)
+    hidden_pairs = sum(sum(row) for row in lvl.pvs)
+    print(f"[PVS] Level {level_idx}: {hidden_pairs} / {len(rects)**2} pairs safely rejected")
     out_c3b = os.path.join(LEVELS_DIR, f"level{level_idx}.c3b")
     c3d2_core.dump_c3b(lvl, f"/textures/custom/L{level_idx}/materials.c3m", out_c3b, None)
 

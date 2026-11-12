@@ -14,31 +14,31 @@ public class PortalRenderer {
 // ==================== Screen Resolution Constants ====================
 
     /** Screen width in pixels */
-    public static final int VIEWPORT_WIDTH = 240;
+    public static int VIEWPORT_WIDTH = 240;
 
     /** Screen height in pixels */
-    public static final int VIEWPORT_HEIGHT = 288;
+    public static int VIEWPORT_HEIGHT = 288;
 
     /** Half of screen width (horizontal center) */
-    public static final int HALF_VIEWPORT_WIDTH = VIEWPORT_WIDTH / 2;
+    public static int HALF_VIEWPORT_WIDTH = VIEWPORT_WIDTH / 2;
 
     /** Half of screen height (vertical center) */
-    public static final int HALF_VIEWPORT_HEIGHT = VIEWPORT_HEIGHT / 2;
+    public static int HALF_VIEWPORT_HEIGHT = VIEWPORT_HEIGHT / 2;
 
     /** Maximum valid X coordinate */
-    public static final int MAX_VIEWPORT_X = VIEWPORT_WIDTH - 1;
+    public static int MAX_VIEWPORT_X = VIEWPORT_WIDTH - 1;
 
     /** Maximum valid Y coordinate */
-    public static final int MAX_VIEWPORT_Y = VIEWPORT_HEIGHT - 1;
+    public static int MAX_VIEWPORT_Y = VIEWPORT_HEIGHT - 1;
 
     /** Total number of pixels in screen buffer */
-    public static final int SCREEN_BUFFER_SIZE = VIEWPORT_WIDTH * VIEWPORT_HEIGHT;
+    public static int SCREEN_BUFFER_SIZE = VIEWPORT_WIDTH * VIEWPORT_HEIGHT;
 
     /** Half screen width in fixed-point 16.16 format */
-    public static final int HALF_VIEWPORT_WIDTH_FP = HALF_VIEWPORT_WIDTH << 16;
+    public static int HALF_VIEWPORT_WIDTH_FP = HALF_VIEWPORT_WIDTH << 16;
 
     /** Half screen height in fixed-point 16.16 format */
-    private static final int HALF_VIEWPORT_HEIGHT_FP = HALF_VIEWPORT_HEIGHT << 16;
+    private static int HALF_VIEWPORT_HEIGHT_FP = HALF_VIEWPORT_HEIGHT << 16;
 
 // ==================== Rendering Constants ====================
 
@@ -49,7 +49,7 @@ public class PortalRenderer {
      * Projection constant for perspective transformation.
      * Calculated as HALF_SCREEN_WIDTH << 48 for 90° horizontal FOV.
      */
-    private static final long PROJECTION_CONSTANT = (long) HALF_VIEWPORT_WIDTH << 48;
+    private static long PROJECTION_CONSTANT = (long) HALF_VIEWPORT_WIDTH << 48;
 
     /** Fixed-point rounding constant (0.5 in 16.16 format) */
     private static final int FP_HALF = 32768;
@@ -107,6 +107,32 @@ public class PortalRenderer {
     /** Count of currently visible objects */
     public static int visibleObjectsCount;
 
+    public static boolean flatSurfaces = false;
+    public static boolean profiling = false;
+    public static int profileLeaves, profileWalls, profileModels;
+
+    /** Reconfigure only on the render thread, between frames. */
+    public static void setFastResolution(boolean fast) {
+        int w = fast ? 120 : 240;
+        int h = fast ? 144 : 288;
+        if (w == VIEWPORT_WIDTH && h == VIEWPORT_HEIGHT) return;
+        int[] replacement = new int[w * h];
+        VIEWPORT_WIDTH = w; VIEWPORT_HEIGHT = h;
+        HALF_VIEWPORT_WIDTH = w / 2; HALF_VIEWPORT_HEIGHT = h / 2;
+        MAX_VIEWPORT_X = w - 1; MAX_VIEWPORT_Y = h - 1;
+        SCREEN_BUFFER_SIZE = w * h;
+        HALF_VIEWPORT_WIDTH_FP = HALF_VIEWPORT_WIDTH << 16;
+        HALF_VIEWPORT_HEIGHT_FP = HALF_VIEWPORT_HEIGHT << 16;
+        PROJECTION_CONSTANT = (long) HALF_VIEWPORT_WIDTH << 48;
+        screenBuffer = replacement;
+        renderUtils = null; angleCorrectionTable = null; reciprocalTable = null;
+        ceilRunStart = null; ceilRunEnd = null; floorRunStart = null; floorRunEnd = null;
+        floorRunMin = ceilRunMin = Integer.MAX_VALUE;
+        floorRunMax = ceilRunMax = -1;
+        Sector.releaseClipArrays();
+        initialize();
+    }
+
     public static void initialize() {
         MathUtils.initializeMathTables();
         initializeClipHistory();
@@ -133,11 +159,11 @@ public class PortalRenderer {
                 reciprocalTable[i] = 65536 / i;
             }
         }
-        skyboxScaleX = MathUtils.fixedPointDivide(65536, 17301600);
+        skyboxScaleX = MathUtils.fixedPointDivide(65536, 17301600) * 240 / VIEWPORT_WIDTH;
         skyboxAngleFactor = MathUtils.fixedPointMultiply(
                 MathUtils.fixedPointDivide(65536, 15794176), 102943
-        );
-        skyboxScaleY = MathUtils.fixedPointDivide(65536, 18874368);
+        ) * 240 / VIEWPORT_WIDTH;
+        skyboxScaleY = MathUtils.fixedPointDivide(65536, 18874368) * 288 / VIEWPORT_HEIGHT;
         skyboxOffsetFactor = MathUtils.fixedPointDivide(65536, 411775);
     }
 
@@ -583,6 +609,7 @@ public class PortalRenderer {
      * @param playerAngle Player view angle
      */
     static void renderWorld(int playerX, int playerY, int playerZ, int playerAngle) {
+        profileLeaves = profileWalls = profileModels = 0;
         Point2D[] transformedVertices = LevelLoader.gameWorld.transformVertices(playerX, playerZ, playerAngle);
 
         BSPNode.visibleSectorsCount = 0;
@@ -626,6 +653,7 @@ public class PortalRenderer {
 
             // Render all walls in sector
             WallSegment[] walls = currentSector.walls;
+            if (profiling) { profileLeaves++; profileWalls += walls.length; }
             for (int wallIndex = 0; wallIndex < walls.length; wallIndex++) {
                 renderWallSegment(walls[wallIndex], transformedVertices,
                         cameraXFixed, playerY, cameraZFixed, doubleAngle);
@@ -705,7 +733,7 @@ public class PortalRenderer {
     /** Calculates a centered C3D billboard dimension without body-frame rounding. */
     private static int calculateBillboardSize(int textureSize, int depth) {
         if (textureSize <= 0 || depth <= 0) return 0;
-        int size = (MathUtils.fixedPointDivide(textureSize << 16, depth) * 120 + 65536) >> 17;
+        int size = (MathUtils.fixedPointDivide(textureSize << 16, depth) * HALF_VIEWPORT_WIDTH + 65536) >> 17;
         return size > 0 ? size : 1;
     }
 

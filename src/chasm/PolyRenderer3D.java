@@ -383,6 +383,7 @@ public final class PolyRenderer3D {
         int radiusFP = 48 << 16;
         if (baseVX + radiusFP < -baseVZ || baseVX - radiusFP > baseVZ) return;
 
+        if (PortalRenderer.profiling) PortalRenderer.profileModels++;
         int baseVY = camWorldH - worldY;
 
         int vc = model.vCount;
@@ -545,6 +546,7 @@ public final class PolyRenderer3D {
             int[] screenBuffer) {
 
         if (weaponModel == null) return;
+        if (PortalRenderer.profiling) PortalRenderer.profileModels++;
         int vc = weaponModel.vCount;
         if (vc > 256) vc = 256;
 
@@ -559,6 +561,8 @@ public final class PolyRenderer3D {
         // +X is screen right, model Z is up. Anything with depth < WEAPON_NEAR is behind the lens.
         final int halfW = PortalRenderer.HALF_VIEWPORT_WIDTH;
         final int halfH = PortalRenderer.HALF_VIEWPORT_HEIGHT;
+        bobX = bobX * PortalRenderer.VIEWPORT_WIDTH / 240;
+        bobY = bobY * PortalRenderer.VIEWPORT_HEIGHT / 288;
         final int WEAPON_NEAR = 120;
         for (int v = 0; v < vc; v++) {
             int i3 = v * 3;

@@ -42,7 +42,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private int pauseCursor = 0;
     private static final int PAUSE_ITEMS = 6;
     private int optionsCursor = 0;
-    private static final int OPTIONS_ITEMS = 4;
+    private static final int OPTIONS_ITEMS = 6;
     private int optionsReturnScreen = SCREEN_MAIN_MENU;
     private int selectedStartLevel = 0; // 0..3
     private boolean showAutomap = false;
@@ -59,6 +59,35 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private int fpsDisplay = 25;
     private int frameCounter = 0;
     private long fpsTimer = 0L;
+    private volatile boolean fastProfile;
+    private boolean appliedFastProfile;
+    private int previousShade = PolyRenderer3D.SHADE_VERTEX_PAINT;
+    private int frameRenderMs, frameBlitMs;
+    private long sumLogic, sumRender, sumBlit, sumFlush;
+    private int sumLeaves, sumWalls, sumModels, profileFrames;
+    private int avgLogic, avgRender, avgBlit, avgFlush, avgLeaves, avgWalls, avgModels;
+
+    public boolean isFastProfile() { return fastProfile; }
+    public int getPreviousShade() { return previousShade; }
+    public void setPreviousShade(int shade) { previousShade = shade & 3; }
+    public void setFastProfile(boolean fast) {
+        if (fast == fastProfile) return;
+        fastProfile = fast;
+        if (fast) {
+            previousShade = world.polyRenderer.shadingMode;
+            world.polyRenderer.shadingMode = PolyRenderer3D.SHADE_FLAT;
+        } else {
+            world.polyRenderer.shadingMode = previousShade;
+        }
+    }
+    public void setFlatSurfaces(boolean flat) { PortalRenderer.flatSurfaces = flat; }
+
+    private void applyResolution() {
+        if (appliedFastProfile == fastProfile) return;
+        PortalRenderer.setFastResolution(fastProfile);
+        appliedFastProfile = fastProfile;
+        scaleXMap = null; scaleYRow = null; scaledBuf = null;
+    }
 
     public ChasmCanvas(ChasmMIDlet midlet, SoundManager sound) {
         super(false);
@@ -133,9 +162,26 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             long frameStart = System.currentTimeMillis();
             try {
                 ensureBuffers();
+                applyResolution();
+                boolean sample = screenState == SCREEN_PLAYING && world.devMode;
+                PortalRenderer.profiling = sample;
+                frameRenderMs = frameBlitMs = 0;
+                long stamp = sample ? System.currentTimeMillis() : 0;
                 updateLogic();
+                long afterLogic = sample ? System.currentTimeMillis() : 0;
                 renderScreen();
+                long beforeFlush = sample ? System.currentTimeMillis() : 0;
                 flushGraphics();
+                if (sample && screenState == SCREEN_PLAYING) {
+                    long afterFlush = System.currentTimeMillis();
+                    sumLogic += afterLogic - stamp;
+                    sumRender += frameRenderMs; sumBlit += frameBlitMs;
+                    sumFlush += afterFlush - beforeFlush;
+                    sumLeaves += PortalRenderer.profileLeaves;
+                    sumWalls += PortalRenderer.profileWalls;
+                    sumModels += PortalRenderer.profileModels;
+                    profileFrames++;
+                }
             } catch (Throwable t) {
                 // Keep game loop alive on any device quirk
             }
@@ -143,7 +189,18 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             frameCounter++;
             long now = System.currentTimeMillis();
             if (now - fpsTimer >= 1000L) {
-                fpsDisplay = frameCounter;
+                fpsDisplay = (int) ((frameCounter * 1000L) / (now - fpsTimer));
+                if (profileFrames > 0) {
+                    avgLogic = (int)(sumLogic / profileFrames);
+                    avgRender = (int)(sumRender / profileFrames);
+                    avgBlit = (int)(sumBlit / profileFrames);
+                    avgFlush = (int)(sumFlush / profileFrames);
+                    avgLeaves = sumLeaves / profileFrames;
+                    avgWalls = sumWalls / profileFrames;
+                    avgModels = sumModels / profileFrames;
+                }
+                profileFrames = sumLeaves = sumWalls = sumModels = 0;
+                sumLogic = sumRender = sumBlit = sumFlush = 0;
                 frameCounter = 0;
                 fpsTimer = now;
             }
@@ -318,9 +375,10 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         int vh = PortalRenderer.VIEWPORT_HEIGHT;
         g.setColor(0x101410);
         g.fillRect(x, y, w, h);
-        if (buf == null || world.polyRenderer == null || w > vw || h > vh) {
-            return;
-        }
+        if (buf == null || world.polyRenderer == null) return;
+        // Keep the preview centred when the 3D buffer is smaller than its frame.
+        if (w > vw) { x += (w - vw) / 2; w = vw; }
+        if (h > vh) { y += (h - vh) / 2; h = vh; }
 
         int t = world.levelTick;
         int slot = (t / 96) % GameWorld.MONSTER_NAMES.length;
@@ -492,8 +550,15 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
 
     private void drawPlayingView(Graphics g) {
         // 1. Render 3D Portal World + 3D Enemies/Limbs/Weapons into PortalRenderer.screenBuffer
+        long start = PortalRenderer.profiling ? System.currentTimeMillis() : 0;
         world.render3DView(PortalRenderer.screenBuffer);
+        if (PortalRenderer.profiling) {
+            long now = System.currentTimeMillis();
+            frameRenderMs = (int)(now - start);
+            start = now;
+        }
         blitViewport(g);
+        if (PortalRenderer.profiling) frameBlitMs = (int)(System.currentTimeMillis() - start);
 
         // 2. Draw crosshair at center of 3D viewport
         int cx = viewW >> 1;
@@ -662,7 +727,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
      */
     private int drawDevBar(Graphics g, Font font) {
         int fh = font.getHeight();
-        int h = fh * 2 + 4;
+        int h = fh * 4 + 4;
         g.setColor(0x101410);
         g.fillRect(0, 0, scrW, h);
         g.setColor(0x9A7B38);
@@ -679,6 +744,10 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.setColor(0x98B890);
         g.drawString("FPS:" + fpsDisplay + " LIMBS:" + world.limbsSevered + " "
                 + SHADE_TAGS[world.polyRenderer.shadingMode & 3], 3, 2 + fh, Graphics.TOP | Graphics.LEFT);
+        g.drawString("L:" + avgLogic + " R:" + avgRender + " B:" + avgBlit + " F:" + avgFlush + " ms",
+                3, 2 + fh * 2, Graphics.TOP | Graphics.LEFT);
+        g.drawString("LEAF:" + avgLeaves + " WALL:" + avgWalls + " MODEL:" + avgModels,
+                3, 2 + fh * 3, Graphics.TOP | Graphics.LEFT);
         return h;
     }
 
@@ -851,7 +920,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             TextTable.get("OPTIONS_SHADING_PREFIX","3D SHADING: ") + shadeStr,
             TextTable.get("OPTIONS_MUSIC_PREFIX","MUSIC: ") + (sound != null && sound.musicEnabled ? onStr : offStr),
             TextTable.get("OPTIONS_SFX_PREFIX","SOUND FX: ") + (sound != null && sound.sfxEnabled ? onStr : offStr),
-            TextTable.get("OPTIONS_ENEMY_PREFIX","ENEMY BEHAVIOR: ") + behaviorStr
+            TextTable.get("OPTIONS_ENEMY_PREFIX","ENEMY BEHAVIOR: ") + behaviorStr,
+            "FAST PROFILE: " + (fastProfile ? onStr : offStr),
+            "FLAT FLOORS: " + (PortalRenderer.flatSurfaces ? onStr : offStr)
         };
 
         int boxW = scrW - 20;
@@ -1143,6 +1214,14 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             case 3:
                 world.enemyBehavior = (world.enemyBehavior == GameWorld.ENEMY_SIMPLE)
                         ? GameWorld.ENEMY_AGGRESSIVE : GameWorld.ENEMY_SIMPLE;
+                if (midlet != null) midlet.saveSettings();
+                break;
+            case 4:
+                setFastProfile(!fastProfile);
+                if (midlet != null) midlet.saveSettings();
+                break;
+            case 5:
+                setFlatSurfaces(!PortalRenderer.flatSurfaces);
                 if (midlet != null) midlet.saveSettings();
                 break;
         }

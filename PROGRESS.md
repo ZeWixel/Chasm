@@ -4,6 +4,19 @@
 > Ресурсы пересобраны из `CSM.BIN` (`python3 tools/build_assets.py`), т.к. в `CSM.BIN` есть
 > `CHASM.INF` с настоящими `[3D_OBJECTS]`/`[WEAPONS]`.
 
+## W595: PVS, profiler and fast profile
+
+- PVS: conservative solid-boundary separation with a two-cell model margin in
+  `tools/pvs.py`; rebuilt C3B. Rejected pairs L1 1220/19044, L2 388/6889,
+  L3 2198/29584. It is a small conservative improvement, not portal-beam PVS.
+- DEV MODE displays per-frame average logic, 3D, scale/drawRGB, flush timings and
+  processed leaf/wall/model counts. The clock is coarse and timings omit HUD/sleep.
+- FAST PROFILE: 120×144 internal rendering and FLAT shading; optional FLAT FLOORS;
+  settings persisted, old saves supported. See README for on-device comparison.
+- PVS compared on/off at 24,192 point/angle/shading combinations; resolution toggles,
+  shading modes, flat surfaces and existing pickup tests pass headlessly. Not run on
+  W595 yet; vertex transformation/entity lookup optimizations await device measurements.
+
 ## Исправлено: предметы, оружие, ключи (главная задача)
 
 **Корень бага.** `models.bin` пакует пикапы в порядке оригинальных `.3O` (17 `LIFE.3O`,

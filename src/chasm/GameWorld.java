@@ -809,6 +809,7 @@ public final class GameWorld {
             if (!PortalRenderer.projectLast(blastFxX[i], blastFxY[i], blastFxZ[i], blastScreen)) continue;
             int age = BLAST_FX_LIFE - left;
             int radius = age < 6 ? 3 + age * 4 : 27 - (age - 6) * 6;
+            radius = radius * PortalRenderer.VIEWPORT_WIDTH / 240;
             if (radius < 2) radius = 2;
             drawFireball(buf, blastScreen[0], blastScreen[1], radius, 255 * left / BLAST_FX_LIFE);
         }

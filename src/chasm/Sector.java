@@ -53,6 +53,11 @@ public final class Sector {
     /**
      * Resets clip arrays to initial state before rendering a new frame.
      */
+    static void releaseClipArrays() {
+        floorClip = null; ceilingClip = null;
+        initialFloorClip = null; initialCeilingClip = null;
+    }
+
     public static void resetClipArrays() {
         int viewportWidth = PortalRenderer.VIEWPORT_WIDTH;
 
