@@ -62,10 +62,13 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private volatile boolean fastProfile;
     private boolean appliedFastProfile;
     private int previousShade = PolyRenderer3D.SHADE_VERTEX_PAINT;
-    private int frameRenderMs, frameBlitMs;
-    private long sumLogic, sumRender, sumBlit, sumFlush;
+    private int frameRenderMs, frameBlitMs, frameScaleMs;
+    private long sumLogic, sumRender, sumBlit, sumFlush, sumScale;
+    private long sumVertex, sumGeometry, sumEntities, sumScans;
+    private int scanSamples;
     private int sumLeaves, sumWalls, sumModels, profileFrames;
     private int avgLogic, avgRender, avgBlit, avgFlush, avgLeaves, avgWalls, avgModels;
+    private int avgVertex, avgGeometry, avgEntities, avgScan, avgScale, avgDraw;
 
     public boolean isFastProfile() { return fastProfile; }
     public int getPreviousShade() { return previousShade; }
@@ -165,7 +168,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 applyResolution();
                 boolean sample = screenState == SCREEN_PLAYING && world.devMode;
                 PortalRenderer.profiling = sample;
-                frameRenderMs = frameBlitMs = 0;
+                frameRenderMs = frameBlitMs = frameScaleMs = 0;
                 long stamp = sample ? System.currentTimeMillis() : 0;
                 updateLogic();
                 long afterLogic = sample ? System.currentTimeMillis() : 0;
@@ -175,7 +178,12 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 if (sample && screenState == SCREEN_PLAYING) {
                     long afterFlush = System.currentTimeMillis();
                     sumLogic += afterLogic - stamp;
-                    sumRender += frameRenderMs; sumBlit += frameBlitMs;
+                    sumRender += frameRenderMs; sumBlit += frameBlitMs; sumScale += frameScaleMs;
+                    sumVertex += PortalRenderer.profileVertexMs;
+                    sumGeometry += PortalRenderer.profileGeometryMs;
+                    sumEntities += PortalRenderer.profileEntitiesMs;
+                    sumScans += PortalRenderer.profileScanMs;
+                    scanSamples += PortalRenderer.profileScanSamples;
                     sumFlush += afterFlush - beforeFlush;
                     sumLeaves += PortalRenderer.profileLeaves;
                     sumWalls += PortalRenderer.profileWalls;
@@ -198,9 +206,19 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                     avgLeaves = sumLeaves / profileFrames;
                     avgWalls = sumWalls / profileFrames;
                     avgModels = sumModels / profileFrames;
+                    avgVertex = (int)(sumVertex / profileFrames);
+                    avgGeometry = (int)(sumGeometry / profileFrames);
+                    avgEntities = (int)(sumEntities / profileFrames);
+                    // Extrapolate sampled leaf scan time to all processed leaves.
+                    avgScan = scanSamples > 0 ? (int)(sumScans * sumLeaves / ((long)scanSamples * profileFrames)) : 0;
+                    avgScale = (int)(sumScale / profileFrames);
+                    avgDraw = (int)((sumBlit - sumScale) / profileFrames);
+                    if (avgDraw < 0) avgDraw = 0;
                 }
                 profileFrames = sumLeaves = sumWalls = sumModels = 0;
-                sumLogic = sumRender = sumBlit = sumFlush = 0;
+                sumLogic = sumRender = sumBlit = sumFlush = sumScale = 0;
+                sumVertex = sumGeometry = sumEntities = sumScans = 0;
+                scanSamples = 0;
                 frameCounter = 0;
                 fpsTimer = now;
             }
@@ -320,6 +338,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private int[] scaleYRow;
 
     private void blitViewport(Graphics g) {
+        long scaleStart = PortalRenderer.profiling ? System.currentTimeMillis() : 0;
         if (viewW == PortalRenderer.VIEWPORT_WIDTH && viewH == PortalRenderer.VIEWPORT_HEIGHT) {
             g.drawRGB(
                 PortalRenderer.screenBuffer,
@@ -360,6 +379,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                     dst[dstRow + x] = src[srcRow + xMap[x]];
                 }
             }
+            if (PortalRenderer.profiling) frameScaleMs = (int)(System.currentTimeMillis() - scaleStart);
             g.drawRGB(scaledBuf, 0, viewW, 0, 0, viewW, viewH, false);
         }
     }
@@ -727,7 +747,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
      */
     private int drawDevBar(Graphics g, Font font) {
         int fh = font.getHeight();
-        int h = fh * 4 + 4;
+        int h = fh * 6 + 4;
         g.setColor(0x101410);
         g.fillRect(0, 0, scrW, h);
         g.setColor(0x9A7B38);
@@ -748,6 +768,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 3, 2 + fh * 2, Graphics.TOP | Graphics.LEFT);
         g.drawString("LEAF:" + avgLeaves + " WALL:" + avgWalls + " MODEL:" + avgModels,
                 3, 2 + fh * 3, Graphics.TOP | Graphics.LEFT);
+        g.drawString("V:" + avgVertex + " G:" + avgGeometry + " E:" + avgEntities + " Q~:" + avgScan,
+                3, 2 + fh * 4, Graphics.TOP | Graphics.LEFT);
+        g.drawString("S:" + avgScale + " D:" + avgDraw + " ms", 3, 2 + fh * 5, Graphics.TOP | Graphics.LEFT);
         return h;
     }
 

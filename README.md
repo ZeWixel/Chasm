@@ -226,14 +226,31 @@ leaves (not necessarily visible), and `MODEL` counts models submitted after the
 coarse view test, including the view weapon. HUD drawing, other UI work, the frame
 sleep, and profiler overhead are outside these four timings. Device clocks may have
 coarse granularity, and `flushGraphics` timing may not include display work queued
-by the phone. Profiling itself has a small cost. FPS is measured over elapsed time,
-including the sleep. Movement and game timers are still tied to frames.
+by the phone. The next row breaks down `R`: `V` = transforming world vertices;
+`G` = BSP traversal, walls, floor/ceiling and their setup; `E` = sector entity pass,
+including lookup, sorting, clip restoration and drawing models. The view weapon and
+some effects are included in `R` but not `E`. `Q~` estimates the lookup portion of
+`E`: one rotating quarter of leaf scans is timed and extrapolated to all processed
+leaves. It is noisy on coarse clocks, can be zero, and is not an additional cost to
+add to `E`. `S` = scaling and `D` = the remainder of `B` (mainly `drawRGB`).
+Rounding means the displayed components need not sum exactly.
+
+All these timings include some instrumentation overhead. In particular, `Q~` adds
+clock calls per sampled leaf, so compare FPS with DEV MODE off when testing actual
+performance. FPS is measured over elapsed time, including the sleep. Movement and
+game timers are still tied to frames.
 
 For a useful comparison on the same device and build, disable music/SFX; stand at
 one position and face the same direction for at least several seconds, note FPS and
 all four timings/counters, then repeat with FAST on and optionally FLAT FLOORS on.
 Repeat in a corridor, in a large view, and with several enemies. A desktop result is
-not a substitute for the phone: no W595 timing has yet been measured for this build.
+not a substitute for the phone: the expanded profiler has not been measured on W595.
+The previous build was measured by the user at X=-1776, Z=-1200: TEXTURE at angle
+353° showed 4 FPS, L/R/B/F=0/158/29/3 ms, 85 leaves, 386 walls, 23 models; FLAT
+at 0° showed 8 FPS, 0/68/29/3 ms and 85/386/26; FLAT with flat floors at 6° showed
+8 FPS, 0/66/29/4 ms and 85/386/26. Resolution/profile cannot be inferred from the
+old overlay alone. These snapshots do not independently identify the cost of model
+shading, resolution, vertex transforms or entity lookup.
 
 PVS now conservatively rejects pairs only when immutable solid boundary segments
 completely separate expanded sector bounding boxes and cover every possible ray

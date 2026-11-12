@@ -132,6 +132,11 @@ public final class PolyRenderer3D {
             int cosAngle,
             int[] screenBuffer) {
 
+        // Time one rotating quarter of leaf scans to limit profiling overhead.
+        // This is an estimate, not a separate rendering pass.
+        boolean sampleScan = PortalRenderer.profiling
+                && ((PortalRenderer.profileScanCursor++ & 3) == PortalRenderer.profileScanPhase);
+        long scanStart = sampleScan ? System.currentTimeMillis() : 0;
         int count = 0;
 
         // 1. Collect Monsters in this sector
@@ -209,6 +214,10 @@ public final class PolyRenderer3D {
             }
         }
 
+        if (sampleScan) {
+            PortalRenderer.profileScanMs += (int)(System.currentTimeMillis() - scanStart);
+            PortalRenderer.profileScanSamples++;
+        }
         if (count == 0) return;
 
         // Sort entities in this sector BACK-TO-FRONT (largest depth first)

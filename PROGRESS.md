@@ -4,6 +4,20 @@
 > Ресурсы пересобраны из `CSM.BIN` (`python3 tools/build_assets.py`), т.к. в `CSM.BIN` есть
 > `CHASM.INF` с настоящими `[3D_OBJECTS]`/`[WEAPONS]`.
 
+## W595 measurements: detailed profiling
+
+- User photos at X=-1776 Z=-1200: TX 4 FPS, L/R/B/F 0/158/29/3 ms,
+  leaves/walls/models 85/386/23; FL 8 FPS, 0/68/29/3, 85/386/26; FL with
+  flat surfaces 8 FPS, 0/66/29/4, 85/386/26. Angles 353°, 0°, 6° respectively.
+  Old overlay does not indicate resolution, so the impact of shading and resolution
+  cannot be distinguished. A zero logic time does not prove zero cost.
+- Extended DEV overlay with V (world vertex transform), G (BSP/walls/flats),
+  E (entity pass), Q~ (estimated scan subset of E), and S/D (scaling/drawRGB).
+  Q~ samples a rotating quarter of leaves and extrapolates; timestamps have overhead
+  and coarse clocks introduce noise. New profiler build has not been tested on W595.
+- No vertex-transform or entity-lookup optimisation yet: the old measurements do not
+  isolate their costs. RenderProfileTest checks that profiling preserves pixels.
+
 ## W595: PVS, profiler and fast profile
 
 - PVS: conservative solid-boundary separation with a two-cell model margin in

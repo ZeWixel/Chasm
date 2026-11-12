@@ -110,6 +110,9 @@ public class PortalRenderer {
     public static boolean flatSurfaces = false;
     public static boolean profiling = false;
     public static int profileLeaves, profileWalls, profileModels;
+    // Per-frame breakdown, measured only in DEV MODE.
+    public static int profileVertexMs, profileGeometryMs, profileEntitiesMs;
+    public static int profileScanMs, profileScanSamples, profileScanCursor, profileScanPhase;
 
     /** Reconfigure only on the render thread, between frames. */
     public static void setFastResolution(boolean fast) {
@@ -610,7 +613,16 @@ public class PortalRenderer {
      */
     static void renderWorld(int playerX, int playerY, int playerZ, int playerAngle) {
         profileLeaves = profileWalls = profileModels = 0;
+        profileVertexMs = profileGeometryMs = profileEntitiesMs = 0;
+        profileScanMs = profileScanSamples = profileScanCursor = 0;
+        if (profiling) profileScanPhase = (profileScanPhase + 1) & 3;
+        long start = profiling ? System.currentTimeMillis() : 0;
         Point2D[] transformedVertices = LevelLoader.gameWorld.transformVertices(playerX, playerZ, playerAngle);
+        if (profiling) {
+            long now = System.currentTimeMillis();
+            profileVertexMs = (int)(now - start);
+            start = now;
+        }
 
         BSPNode.visibleSectorsCount = 0;
         LevelLoader.gameWorld.getRootBSPNode().traverseBSP(LevelLoader.gameWorld.playerBody,
@@ -662,6 +674,11 @@ public class PortalRenderer {
 
         // Render floor and ceiling spans
         renderUtils.renderAllSpans(sinAngle, cosAngle, -cameraXFixed, -cameraZFixed);
+        if (profiling) {
+            long now = System.currentTimeMillis();
+            profileGeometryMs = (int)(now - start);
+            start = now;
+        }
 
         // Render dynamic objects in back-to-front order
         for (int sectorIndex = BSPNode.visibleSectorsCount - 1; sectorIndex >= 0; sectorIndex--) {
@@ -676,6 +693,7 @@ public class PortalRenderer {
             renderDynamicObjects(currentSector, playerX, playerY, playerZ,
                     (long)sinAngle, (long)cosAngle);
         }
+        if (profiling) profileEntitiesMs = (int)(System.currentTimeMillis() - start);
     }
 
     /**

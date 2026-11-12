@@ -88,8 +88,14 @@ public final class RenderProfileTest {
                 PortalRenderer.flatSurfaces = flat != 0;
                 for (int shade = 0; shade < 4; shade++) {
                     w.polyRenderer.shadingMode = shade;
+                    PortalRenderer.profiling = false;
+                    int[] baseline = render(w);
                     PortalRenderer.profiling = true;
                     int[] frame = render(w);
+                    require(Arrays.equals(baseline, frame), "profiler changed rendered pixels");
+                    require(PortalRenderer.profileVertexMs >= 0 && PortalRenderer.profileGeometryMs >= 0
+                            && PortalRenderer.profileEntitiesMs >= 0 && PortalRenderer.profileScanMs >= 0,
+                            "negative profiler duration");
                     require(PortalRenderer.profileLeaves > 0 && PortalRenderer.profileWalls > 0
                             && PortalRenderer.profileModels > 0, "profiling counters");
                     boolean drawn = false;
@@ -98,6 +104,14 @@ public final class RenderProfileTest {
                 }
             }
         }
+        // Across four rotating sample phases, at least one leaf must be sampled.
+        int sampled = 0;
+        PortalRenderer.profiling = true;
+        for (int i = 0; i < 4; i++) {
+            render(w);
+            sampled += PortalRenderer.profileScanSamples;
+        }
+        require(sampled > 0, "no entity scan samples");
         PortalRenderer.flatSurfaces = false;
         PortalRenderer.profiling = false;
         System.out.println("PVS render comparisons=" + comparisons + " rejected=" + rejected + "; resolution/flat/shading OK");
