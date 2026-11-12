@@ -42,7 +42,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private int pauseCursor = 0;
     private static final int PAUSE_ITEMS = 6;
     private int optionsCursor = 0;
-    private static final int OPTIONS_ITEMS = 4;
+    private static final int OPTIONS_ITEMS = 6;
     private int optionsReturnScreen = SCREEN_MAIN_MENU;
     private int selectedStartLevel = 0; // 0..3
     private boolean showAutomap = false;
@@ -59,6 +59,38 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private int fpsDisplay = 25;
     private int frameCounter = 0;
     private long fpsTimer = 0L;
+    private volatile boolean fastProfile;
+    private boolean appliedFastProfile;
+    private int previousShade = PolyRenderer3D.SHADE_VERTEX_PAINT;
+    private int frameRenderMs, frameBlitMs, frameScaleMs;
+    private long sumLogic, sumRender, sumBlit, sumFlush, sumScale;
+    private long sumVertex, sumGeometry, sumEntities, sumScans, sumBuckets;
+    private int scanSamples;
+    private int sumLeaves, sumWalls, sumModels, profileFrames;
+    private int avgLogic, avgRender, avgBlit, avgFlush, avgLeaves, avgWalls, avgModels;
+    private int avgVertex, avgGeometry, avgEntities, avgScan, avgScale, avgDraw;
+
+    public boolean isFastProfile() { return fastProfile; }
+    public int getPreviousShade() { return previousShade; }
+    public void setPreviousShade(int shade) { previousShade = shade & 3; }
+    public void setFastProfile(boolean fast) {
+        if (fast == fastProfile) return;
+        fastProfile = fast;
+        if (fast) {
+            previousShade = world.polyRenderer.shadingMode;
+            world.polyRenderer.shadingMode = PolyRenderer3D.SHADE_FLAT;
+        } else {
+            world.polyRenderer.shadingMode = previousShade;
+        }
+    }
+    public void setFlatSurfaces(boolean flat) { PortalRenderer.flatSurfaces = flat; }
+
+    private void applyResolution() {
+        if (appliedFastProfile == fastProfile) return;
+        PortalRenderer.setFastResolution(fastProfile);
+        appliedFastProfile = fastProfile;
+        scaleXMap = null; scaleYRow = null; scaledBuf = null;
+    }
 
     public ChasmCanvas(ChasmMIDlet midlet, SoundManager sound) {
         super(false);
@@ -106,10 +138,17 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         int h = getHeight();
         if (w <= 0) w = 240;
         if (h <= 0) h = 320;
-        if (w != scrW || h != scrH) {
+        // The status bar is two rows: 16 px icons on top and one text line below.
+        // Size it from the real font height, otherwise the weapon name (and the
+        // key/enemy line) is clipped by the screen edge on S60 devices.
+        Font hudFont = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_BOLD, Font.SIZE_SMALL);
+        int hudFontH = hudFont.getHeight();
+        int wantedHudH = Math.max(16, hudFontH) + hudFontH + 2;
+        if (wantedHudH < 24) wantedHudH = 24;
+        if (w != scrW || h != scrH || wantedHudH != hudH) {
             scrW = w;
             scrH = h;
-            hudH = (h >= 240) ? 32 : 24;
+            hudH = wantedHudH;
             viewW = w;
             viewH = h - hudH;
             if (viewW != PortalRenderer.VIEWPORT_WIDTH || viewH != PortalRenderer.VIEWPORT_HEIGHT) {
@@ -126,9 +165,32 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             long frameStart = System.currentTimeMillis();
             try {
                 ensureBuffers();
+                applyResolution();
+                boolean sample = screenState == SCREEN_PLAYING && world.devMode;
+                PortalRenderer.profiling = sample;
+                frameRenderMs = frameBlitMs = frameScaleMs = 0;
+                long stamp = sample ? System.currentTimeMillis() : 0;
                 updateLogic();
+                long afterLogic = sample ? System.currentTimeMillis() : 0;
                 renderScreen();
+                long beforeFlush = sample ? System.currentTimeMillis() : 0;
                 flushGraphics();
+                if (sample && screenState == SCREEN_PLAYING) {
+                    long afterFlush = System.currentTimeMillis();
+                    sumLogic += afterLogic - stamp;
+                    sumRender += frameRenderMs; sumBlit += frameBlitMs; sumScale += frameScaleMs;
+                    sumVertex += PortalRenderer.profileVertexMs;
+                    sumGeometry += PortalRenderer.profileGeometryMs;
+                    sumEntities += PortalRenderer.profileEntitiesMs;
+                    sumScans += PortalRenderer.profileScanMs;
+                    sumBuckets += PortalRenderer.profileBucketMs;
+                    scanSamples += PortalRenderer.profileScanSamples;
+                    sumFlush += afterFlush - beforeFlush;
+                    sumLeaves += PortalRenderer.profileLeaves;
+                    sumWalls += PortalRenderer.profileWalls;
+                    sumModels += PortalRenderer.profileModels;
+                    profileFrames++;
+                }
             } catch (Throwable t) {
                 // Keep game loop alive on any device quirk
             }
@@ -136,7 +198,29 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             frameCounter++;
             long now = System.currentTimeMillis();
             if (now - fpsTimer >= 1000L) {
-                fpsDisplay = frameCounter;
+                fpsDisplay = (int) ((frameCounter * 1000L) / (now - fpsTimer));
+                if (profileFrames > 0) {
+                    avgLogic = (int)(sumLogic / profileFrames);
+                    avgRender = (int)(sumRender / profileFrames);
+                    avgBlit = (int)(sumBlit / profileFrames);
+                    avgFlush = (int)(sumFlush / profileFrames);
+                    avgLeaves = sumLeaves / profileFrames;
+                    avgWalls = sumWalls / profileFrames;
+                    avgModels = sumModels / profileFrames;
+                    avgVertex = (int)(sumVertex / profileFrames);
+                    avgGeometry = (int)(sumGeometry / profileFrames);
+                    avgEntities = (int)(sumEntities / profileFrames);
+                    // Extrapolate sampled leaf scan time to all processed leaves.
+                    avgScan = (int)(sumBuckets / profileFrames);
+                    if (scanSamples > 0) avgScan += (int)(sumScans * sumLeaves / ((long)scanSamples * profileFrames));
+                    avgScale = (int)(sumScale / profileFrames);
+                    avgDraw = (int)((sumBlit - sumScale) / profileFrames);
+                    if (avgDraw < 0) avgDraw = 0;
+                }
+                profileFrames = sumLeaves = sumWalls = sumModels = 0;
+                sumLogic = sumRender = sumBlit = sumFlush = sumScale = 0;
+                sumVertex = sumGeometry = sumEntities = sumScans = sumBuckets = 0;
+                scanSamples = 0;
                 frameCounter = 0;
                 fpsTimer = now;
             }
@@ -256,6 +340,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
     private int[] scaleYRow;
 
     private void blitViewport(Graphics g) {
+        long scaleStart = PortalRenderer.profiling ? System.currentTimeMillis() : 0;
         if (viewW == PortalRenderer.VIEWPORT_WIDTH && viewH == PortalRenderer.VIEWPORT_HEIGHT) {
             g.drawRGB(
                 PortalRenderer.screenBuffer,
@@ -285,17 +370,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                     scaleYRow[y] = ((y * srcH) / viewH) * srcW;
                 }
             }
-            int[] src = PortalRenderer.screenBuffer;
-            int[] dst = scaledBuf;
-            int[] xMap = scaleXMap;
-            int[] yRow = scaleYRow;
-            for (int y = 0; y < viewH; y++) {
-                int srcRow = yRow[y];
-                int dstRow = y * viewW;
-                for (int x = 0; x < viewW; x++) {
-                    dst[dstRow + x] = src[srcRow + xMap[x]];
-                }
-            }
+            ViewportScaler.scale(PortalRenderer.screenBuffer, scaledBuf,
+                    srcW, viewW, viewH, scaleXMap, scaleYRow);
+            if (PortalRenderer.profiling) frameScaleMs = (int)(System.currentTimeMillis() - scaleStart);
             g.drawRGB(scaledBuf, 0, viewW, 0, 0, viewW, viewH, false);
         }
     }
@@ -311,9 +388,10 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         int vh = PortalRenderer.VIEWPORT_HEIGHT;
         g.setColor(0x101410);
         g.fillRect(x, y, w, h);
-        if (buf == null || world.polyRenderer == null || w > vw || h > vh) {
-            return;
-        }
+        if (buf == null || world.polyRenderer == null) return;
+        // Keep the preview centred when the 3D buffer is smaller than its frame.
+        if (w > vw) { x += (w - vw) / 2; w = vw; }
+        if (h > vh) { y += (h - vh) / 2; h = vh; }
 
         int t = world.levelTick;
         int slot = (t / 96) % GameWorld.MONSTER_NAMES.length;
@@ -485,8 +563,15 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
 
     private void drawPlayingView(Graphics g) {
         // 1. Render 3D Portal World + 3D Enemies/Limbs/Weapons into PortalRenderer.screenBuffer
+        long start = PortalRenderer.profiling ? System.currentTimeMillis() : 0;
         world.render3DView(PortalRenderer.screenBuffer);
+        if (PortalRenderer.profiling) {
+            long now = System.currentTimeMillis();
+            frameRenderMs = (int)(now - start);
+            start = now;
+        }
         blitViewport(g);
+        if (PortalRenderer.profiling) frameBlitMs = (int)(System.currentTimeMillis() - start);
 
         // 2. Draw crosshair at center of 3D viewport
         int cx = viewW >> 1;
@@ -522,8 +607,34 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             }
         }
 
+        // 4b. Collected key cards in the top-right corner of the 3D view
+        drawKeyChips(g, topY + 18);
+
         // 5. Draw Chasm bottom status bar HUD
         drawStatusBar(g, smallFont);
+    }
+
+    /**
+     * Three small colour chips (R/G/B) for the key cards the player carries, in the
+     * top-right corner of the 3D view. Nothing is drawn for keys not collected.
+     */
+    private void drawKeyChips(Graphics g, int y) {
+        int chipW = 9, chipH = 7, gap = 3;
+        int x = scrW - 2 - chipW;
+        if (world.hasBlueKey) {
+            g.setColor(0x2244CC); g.fillRect(x, y, chipW, chipH);
+            g.setColor(0x8899FF); g.drawRect(x, y, chipW - 1, chipH - 1);
+            x -= chipW + gap;
+        }
+        if (world.hasGreenKey) {
+            g.setColor(0x22AA44); g.fillRect(x, y, chipW, chipH);
+            g.setColor(0x99FF99); g.drawRect(x, y, chipW - 1, chipH - 1);
+            x -= chipW + gap;
+        }
+        if (world.hasRedKey) {
+            g.setColor(0xCC2222); g.fillRect(x, y, chipW, chipH);
+            g.setColor(0xFF9999); g.drawRect(x, y, chipW - 1, chipH - 1);
+        }
     }
 
     private void drawStatusBar(Graphics g, Font font) {
@@ -535,20 +646,27 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
         g.drawRect(0, barY, scrW - 1, hudH - 1);
         g.setFont(font);
         int fh = font.getHeight();
-        boolean icons = hudH >= 32 && UiAssets.iconHp != null;
-        int textOff = icons ? (16 - fh) >> 1 : 0;
+        // Top row: 16 px icons, but never shorter than the font (some S60 fonts are 17-18 px).
+        int rowH = Math.max(16, fh);
+        boolean icons = UiAssets.iconHp != null;
+        int textOff = icons ? Math.max(0, (rowH - fh) >> 1) : 0;
+        int iconOff = Math.max(0, (rowH - 16) >> 1);
+        // Vertical offset of the second row (weapon / enemies) inside the remaining
+        // space below the icon row. hudH is sized for it in ensureBuffers().
+        int botOff = icons ? Math.max(0, (hudH - rowH - fh) >> 1) : 0;
         // HUD redesign (closer to original PC screenshot image-4):
         // Top row (y = barY): HP | Armor | Ammo in one row (three equal columns)
         // Bottom row (y = barY+16): Weapon name (left half) | Enemies remaining (right half)
         // No LEVEL display in HUD — level is shown in pause menu.
         if (icons) {
             int rowTop = barY;
-            int rowBot = barY + 16;
+            int rowBot = barY + rowH;
             int slotW = scrW / 3;
             // Top row: HP / Armor / Ammo centered in each third
             String hpStr = String.valueOf(world.health);
             String arStr = String.valueOf(world.armor);
-            String amStr = String.valueOf(world.ammo[world.curWeapon]);
+            // The rifle (slot 0) has unlimited ammo, like in the original game.
+            String amStr = (world.curWeapon == 0) ? "INF" : String.valueOf(world.ammo[world.curWeapon]);
             // Slot 0: HP
             {
                 int tw = font.stringWidth(hpStr);
@@ -556,7 +674,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 int cx = slotW >> 1;
                 int left = cx - (contentW >> 1);
                 g.setColor(world.health <= 25 ? 0xFF4444 : 0xFFCC44);
-                g.drawRGB(UiAssets.iconHp, 0, 16, left, rowTop, 16, 16, true);
+                g.drawRGB(UiAssets.iconHp, 0, 16, left, rowTop + iconOff, 16, 16, true);
                 g.drawString(hpStr, left + 20, rowTop + textOff, Graphics.TOP | Graphics.LEFT);
             }
             // Slot 1: Armor
@@ -566,7 +684,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 int cx = slotW + (slotW >> 1);
                 int left = cx - (contentW >> 1);
                 g.setColor(0x88CCFF);
-                g.drawRGB(UiAssets.iconAr, 0, 16, left, rowTop, 16, 16, true);
+                g.drawRGB(UiAssets.iconAr, 0, 16, left, rowTop + iconOff, 16, 16, true);
                 g.drawString(arStr, left + 20, rowTop + textOff, Graphics.TOP | Graphics.LEFT);
             }
             // Slot 2: Ammo
@@ -576,28 +694,29 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 int cx = (slotW * 2) + (slotW >> 1);
                 int left = cx - (contentW >> 1);
                 g.setColor(0xD8D8C8);
-                g.drawRGB(UiAssets.iconAmmo, 0, 16, left, rowTop, 16, 16, true);
+                g.drawRGB(UiAssets.iconAmmo, 0, 16, left, rowTop + iconOff, 16, 16, true);
                 g.drawString(amStr, left + 20, rowTop + textOff, Graphics.TOP | Graphics.LEFT);
             }
             // Bottom row: weapon name on left half, enemy count on right half
             g.setColor(0xFFE066);
-            g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], scrW >> 2, rowBot + textOff, Graphics.TOP | Graphics.HCENTER);
+            g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], scrW >> 2, rowBot + botOff, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0xFF9988);
-            g.drawString("ENEMIES: " + countEnemiesAlive(), (scrW * 3) >> 2, rowBot + textOff, Graphics.TOP | Graphics.HCENTER);
+            g.drawString("ENEMIES: " + countEnemiesAlive(), (scrW * 3) >> 2, rowBot + botOff, Graphics.TOP | Graphics.HCENTER);
             // Thin divider between top and bottom rows
             g.setColor(0x786434);
             g.drawLine(0, rowBot, scrW, rowBot);
         } else {
             // Compact (no icons): top row 3 values text, bottom row 2 values
-            int rowTop = barY + 2;
-            int rowBot = barY + 14;
+            int rowTop = barY + 1;
+            int rowBot = rowTop + fh;
             int slotW = scrW / 3;
             g.setColor(world.health <= 25 ? 0xFF4444 : 0xFFCC44);
             g.drawString(String.valueOf(world.health), slotW >> 1, rowTop, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0x88CCFF);
             g.drawString(String.valueOf(world.armor), slotW + (slotW >> 1), rowTop, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0xD8D8C8);
-            g.drawString(String.valueOf(world.ammo[world.curWeapon]), (slotW * 2) + (slotW >> 1), rowTop, Graphics.TOP | Graphics.HCENTER);
+            String ammoText = (world.curWeapon == 0) ? "INF" : String.valueOf(world.ammo[world.curWeapon]);
+            g.drawString(ammoText, (slotW * 2) + (slotW >> 1), rowTop, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0xFFE066);
             g.drawString(GameWorld.WEAPON_NAMES[world.curWeapon], scrW >> 2, rowBot, Graphics.TOP | Graphics.HCENTER);
             g.setColor(0xFF9988);
@@ -621,7 +740,7 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
      */
     private int drawDevBar(Graphics g, Font font) {
         int fh = font.getHeight();
-        int h = fh * 2 + 4;
+        int h = fh * 6 + 4;
         g.setColor(0x101410);
         g.fillRect(0, 0, scrW, h);
         g.setColor(0x9A7B38);
@@ -637,7 +756,16 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
                 + " A:" + deg, 3, 2, Graphics.TOP | Graphics.LEFT);
         g.setColor(0x98B890);
         g.drawString("FPS:" + fpsDisplay + " LIMBS:" + world.limbsSevered + " "
-                + SHADE_TAGS[world.polyRenderer.shadingMode & 3], 3, 2 + fh, Graphics.TOP | Graphics.LEFT);
+                + SHADE_TAGS[world.polyRenderer.shadingMode & 3]
+                + (appliedFastProfile ? " FAST" : " FULL") + (PortalRenderer.flatSurfaces ? " SF" : ""),
+                3, 2 + fh, Graphics.TOP | Graphics.LEFT);
+        g.drawString("L:" + avgLogic + " R:" + avgRender + " B:" + avgBlit + " F:" + avgFlush + " ms",
+                3, 2 + fh * 2, Graphics.TOP | Graphics.LEFT);
+        g.drawString("LEAF:" + avgLeaves + " WALL:" + avgWalls + " MODEL:" + avgModels,
+                3, 2 + fh * 3, Graphics.TOP | Graphics.LEFT);
+        g.drawString("V:" + avgVertex + " G:" + avgGeometry + " E:" + avgEntities + " Q~:" + avgScan,
+                3, 2 + fh * 4, Graphics.TOP | Graphics.LEFT);
+        g.drawString("S:" + avgScale + " D:" + avgDraw + " ms", 3, 2 + fh * 5, Graphics.TOP | Graphics.LEFT);
         return h;
     }
 
@@ -810,7 +938,9 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             TextTable.get("OPTIONS_SHADING_PREFIX","3D SHADING: ") + shadeStr,
             TextTable.get("OPTIONS_MUSIC_PREFIX","MUSIC: ") + (sound != null && sound.musicEnabled ? onStr : offStr),
             TextTable.get("OPTIONS_SFX_PREFIX","SOUND FX: ") + (sound != null && sound.sfxEnabled ? onStr : offStr),
-            TextTable.get("OPTIONS_ENEMY_PREFIX","ENEMY BEHAVIOR: ") + behaviorStr
+            TextTable.get("OPTIONS_ENEMY_PREFIX","ENEMY BEHAVIOR: ") + behaviorStr,
+            "FAST PROFILE: " + (fastProfile ? onStr : offStr),
+            "FLAT FLOORS: " + (PortalRenderer.flatSurfaces ? onStr : offStr)
         };
 
         int boxW = scrW - 20;
@@ -1102,6 +1232,14 @@ public final class ChasmCanvas extends GameCanvas implements Runnable {
             case 3:
                 world.enemyBehavior = (world.enemyBehavior == GameWorld.ENEMY_SIMPLE)
                         ? GameWorld.ENEMY_AGGRESSIVE : GameWorld.ENEMY_SIMPLE;
+                if (midlet != null) midlet.saveSettings();
+                break;
+            case 4:
+                setFastProfile(!fastProfile);
+                if (midlet != null) midlet.saveSettings();
+                break;
+            case 5:
+                setFlatSurfaces(!PortalRenderer.flatSurfaces);
                 if (midlet != null) midlet.saveSettings();
                 break;
         }

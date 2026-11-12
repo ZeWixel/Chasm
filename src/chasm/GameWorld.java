@@ -97,16 +97,73 @@ public final class GameWorld {
     public int enemyBehavior = ENEMY_SIMPLE; // 0 = default 380, 1 = aggressive ~1.6x visibility
     public static final String[] ENEMY_BEHAVIOR_NAMES = { "SIMPLE", "AGGRESSIVE" };
 
+    // Weapon slots follow the original Chasm arsenal (CHASM.INF [WEAPONS], keys 1..8):
+    //   0 Rifle (unlimited ammo), 1 Super Shotgun, 2 Volcano, 3 BladeGun,
+    //   4 Laser Crossbow, 5 Grenader. Slots 6/7 (Land Mines, Mega Destroyer) are not ported.
+    // The names carry no slot digit (the HUD shows the name only, and the pickup message
+    // is "GOT <name>"); the old "1:RIFT RIFLE" strings produced "GOT1:RIFT RIFLE".
     public static final String[] WEAPON_NAMES = {
-        "1:RIFT RIFLE",
-        "2:DOUBLE SHOTGUN",
-        "3:CHAINGUN",
-        "4:CROSSBOW",
-        "5:SAW LAUNCHER",
-        "6:MEGAZAPPER"
+        "RIFLE",
+        "SUPER SHOTGUN",
+        "VOLCANO",
+        "BLADEGUN",
+        "LASER CROSSBOW",
+        "GRENADER"
     };
 
+    // Weapon-in-hand models (models.bin 11..16 = OGUN6, RIF_H5, V8H, DISK, CROSS, GR4).
+    // Slot 3 (BladeGun) uses the DISK model, slot 4 (Laser Crossbow) uses CROSS.
     public static final int[] WEAPON_MODEL_IDS = { 11, 12, 13, 14, 15, 16 };
+
+    // Per-weapon ammo cap, from the CHASM.INF "Limit" column. Slot 0 is unlimited.
+    public static final int[] WEAPON_AMMO_LIMIT = { 0, 50, 200, 50, 40, 50 };
+
+    // ==================== Pickup models (models.bin 17..29) ====================
+    // One id per model, in the exact order tools/build_assets.py writes the .3O files:
+    //   17 LIFE.3O (medkit)      18 BIGLIFE.3O (mega health)
+    //   19 ARMOR3.3O (body armour) 20 HELMET1.3O (helmet)
+    //   21 BAG.3O (ammo backpack) 22 W_RIFLE.3O (super shotgun pickup)
+    //   23 W_VCANO.3O (Volcano)   24 WDISK.3O (BladeGun)
+    //   25 WCROSS.3O (crossbow)   26 W_GR.3O (Grenader)
+    //   27 R_CARD.3O  28 G_CARD.3O  29 B_CARD.3O (keys)
+    // The effects are the original CHASM.INF [3D_OBJECTS] a_codes (see README.md).
+    public static final int ITEM_FIRST       = 17;
+    public static final int ITEM_MEDKIT      = 17;
+    public static final int ITEM_MEGA_HEALTH = 18;
+    public static final int ITEM_BODY_ARMOR  = 19;
+    public static final int ITEM_HELMET      = 20;
+    public static final int ITEM_AMMO_PACK   = 21;
+    public static final int ITEM_W_SHOTGUN   = 22;
+    public static final int ITEM_W_VOLCANO   = 23;
+    public static final int ITEM_W_BLADEGUN  = 24;
+    public static final int ITEM_W_CROSSBOW  = 25;
+    public static final int ITEM_W_GRENADER  = 26;
+    public static final int ITEM_KEY_RED     = 27;
+    public static final int ITEM_KEY_GREEN   = 28;
+    public static final int ITEM_KEY_BLUE    = 29;
+    public static final int ITEM_LAST        = 29;
+
+    public static final int NOMINAL_HEALTH = 100;
+    public static final int MAX_HEALTH     = 200;
+    public static final int MAX_ARMOR      = 200;
+
+    /** Display names for pickup models, indexed by model id (17..29). */
+    public static final String[] ITEM_NAMES = new String[ITEM_LAST + 1];
+    static {
+        ITEM_NAMES[ITEM_MEDKIT]      = "MEDKIT";
+        ITEM_NAMES[ITEM_MEGA_HEALTH] = "MEGA HEALTH";
+        ITEM_NAMES[ITEM_BODY_ARMOR]  = "BODY ARMOR";
+        ITEM_NAMES[ITEM_HELMET]      = "HELMET";
+        ITEM_NAMES[ITEM_AMMO_PACK]   = "AMMO PACK";
+        ITEM_NAMES[ITEM_W_SHOTGUN]   = "SUPER SHOTGUN";
+        ITEM_NAMES[ITEM_W_VOLCANO]   = "VOLCANO";
+        ITEM_NAMES[ITEM_W_BLADEGUN]  = "BLADEGUN";
+        ITEM_NAMES[ITEM_W_CROSSBOW]  = "LASER CROSSBOW";
+        ITEM_NAMES[ITEM_W_GRENADER]  = "GRENADER";
+        ITEM_NAMES[ITEM_KEY_RED]     = "RED KEY";
+        ITEM_NAMES[ITEM_KEY_GREEN]   = "GREEN KEY";
+        ITEM_NAMES[ITEM_KEY_BLUE]    = "BLUE KEY";
+    }
 
     // Открытый текст: переопределяет хардкод если есть res/open/texts/strings.txt
     static {
@@ -128,11 +185,21 @@ public final class GameWorld {
                 String v = TextTable.get("WEAPON_" + i, null);
                 if (v != null) WEAPON_NAMES[i] = v;
             }
+            for (int i = ITEM_FIRST; i <= ITEM_LAST; i++) {
+                if (ITEM_NAMES[i] == null) continue;
+                String v = TextTable.get("ITEM_" + i, null);
+                if (v != null) ITEM_NAMES[i] = v;
+            }
         } catch (Throwable t) {}
     }
     public static final int[] WEAPON_COOLDOWN  = { 5, 11, 3, 9, 8, 14 };
-    public static final int[] WEAPON_DAMAGE    = { 24, 52, 18, 42, 48, 85 };
-    public static final int[] WEAPON_AMMO_COST = { 1, 2, 1, 1, 1, 2 };
+    /** Grenader projectile damage; a player bolt with this damage explodes on impact. */
+    public static final int GRENADE_DAMAGE = 85;
+    public static final int[] WEAPON_DAMAGE    = { 24, 52, 18, 42, 48, GRENADE_DAMAGE };
+    // Slot 0 is the rifle: unlimited, so it never consumes ammo.
+    public static final int[] WEAPON_AMMO_COST = { 0, 2, 1, 1, 1, 2 };
+    // Ammo added to each owned weapon by an ammo pack (BAG.3O), CHASM.INF DAm.
+    public static final int[] WEAPON_AMMO_PACK = { 0, 10, 10, 20, 10, 5 };
 
     // Monster AI states
     // ==================== Player & Renderer State ====================
@@ -145,11 +212,16 @@ public final class GameWorld {
     // Jump state (16.16 world units): '0' key launches, gravity brings the eye back down.
     public int jumpOffset = 0;
     public int jumpVel = 0;
-    public int health = 100;
-    public int armor = 25;
+    public int health = NOMINAL_HEALTH;
+    public int armor = 0;
     public int curWeapon = 0;
     public final boolean[] weaponOwned = new boolean[6];
     public final int[] ammo = new int[6];
+
+    // ==================== Key cards (models 27/28/29) ====================
+    public boolean hasRedKey = false;
+    public boolean hasGreenKey = false;
+    public boolean hasBlueKey = false;
 
     public int weaponCooldown = 0;
     public int weaponAnimTick = 0;
@@ -283,19 +355,18 @@ public final class GameWorld {
     }
 
     public void resetInventory() {
-        health = 100;
-        armor = 25;
+        health = NOMINAL_HEALTH;
+        armor = 0;
         curWeapon = 0;
         for (int i = 0; i < 6; i++) {
-            weaponOwned[i] = (i <= 1); // Start with Rift Rifle + Double Shotgun
+            // As in the original game the player starts with the rifle and nothing else;
+            // every other weapon is a pickup. The rifle needs no ammo.
+            weaponOwned[i] = (i == 0);
             ammo[i] = 0;
         }
-        ammo[0] = 60;
-        ammo[1] = 24;
-        ammo[2] = 50;
-        ammo[3] = 12;
-        ammo[4] = 12;
-        ammo[5] = 10;
+        hasRedKey = false;
+        hasGreenKey = false;
+        hasBlueKey = false;
         limbsSevered = 0;
         monstersKilled = 0;
     }
@@ -488,7 +559,7 @@ public final class GameWorld {
                 monDetourTicks[i] = 0;
             }
 
-            // Items: >H count, then >Bhh (modelId 17..28, ix, iz)
+            // Items: >H count, then >Bhh (modelId 17..29, ix, iz)
             int iCount = dis.readUnsignedShort();
             this.itemCount = iCount < MAX_ITEMS ? iCount : MAX_ITEMS;
             for (int i = 0; i < iCount; i++) {
@@ -497,9 +568,14 @@ public final class GameWorld {
                 int zUnits = dis.readShort();
                 if (i >= MAX_ITEMS) continue;
 
-                if (modelId < 17 || modelId > 29) modelId = 17 + (i % 12);
+                // Do not substitute a random model for a bad id: that used to turn one
+                // pickup into a different item. An id outside 17..29 is not a pickup.
+                if (modelId < ITEM_FIRST || modelId > ITEM_LAST) {
+                    itemActive[i] = false;
+                    continue;
+                }
                 itemActive[i] = true;
-                itemType[i] = modelId - 17;
+                itemType[i] = modelId - ITEM_FIRST;
                 itemModelId[i] = modelId;
                 itemX[i] = xUnits << 16;
                 itemZ[i] = zUnits << 16;
@@ -666,7 +742,7 @@ public final class GameWorld {
         blastFxZ[slot] = cz;
         blastFxLeft[slot] = BLAST_FX_LIFE;
     }
-    private void triggerMegazapperBlast(int cx, int cz) {
+    private void triggerGrenadeBlast(int cx, int cz) {
         SoundManager.playSfx(SoundManager.SFX_ROCKET);
         spawnBlastFx(cx, cz);
         for (int k = 0; k < 4; k++) spawnProjectile(false, PROJ_GIB, cx, 8 << 16, cz, nextRand() & 0xFFFF, 0);
@@ -733,6 +809,7 @@ public final class GameWorld {
             if (!PortalRenderer.projectLast(blastFxX[i], blastFxY[i], blastFxZ[i], blastScreen)) continue;
             int age = BLAST_FX_LIFE - left;
             int radius = age < 6 ? 3 + age * 4 : 27 - (age - 6) * 6;
+            radius = radius * PortalRenderer.VIEWPORT_WIDTH / 240;
             if (radius < 2) radius = 2;
             drawFireball(buf, blastScreen[0], blastScreen[1], radius, 255 * left / BLAST_FX_LIFE);
         }
@@ -927,71 +1004,120 @@ public final class GameWorld {
             if (!itemActive[i]) continue;
             if (Math.abs(playerBody.x - itemX[i]) < pickupRadius
                     && Math.abs(playerBody.z - itemZ[i]) < pickupRadius) {
-                int modelId = itemModelId[i];
-                // 17 medkit, 18 armor, 19 rifle weapon, 20 shotgun, 21 chaingun ammo, 22 crossbow, 23 saw, 24 crossbow ammo, 25 saw ammo, 26 megazapper
-                if (modelId == 17 && health >= 100) continue;
-                itemActive[i] = false;
-                if (modelId == 17) {
-                    health = Math.min(100, health + 25);
-                    setMessage(TextTable.get("HUD_MEDKIT", "MEDKIT +25 HP"), 25);
-                } else if (modelId == 18) {
-                    armor = Math.min(100, armor + 25);
-                    setMessage(TextTable.get("HUD_ARMOR", "ARMOR +25"), 25);
-                } else if (modelId == 19) {
-                    weaponOwned[0] = true; ammo[0] = Math.min(200, ammo[0] + 15);
-                    if (curWeapon < 0) curWeapon = 0;
-                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[0], 30);
-                } else if (modelId == 20) {
-                    weaponOwned[1] = true; ammo[1] = Math.min(200, ammo[1] + 15);
-                    if (curWeapon < 1) curWeapon = 1;
-                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[1], 30);
-                } else if (modelId == 21) {
-                    // Chaingun ammo (small box 79)
-                    ammo[2] = Math.min(200, ammo[2] + 15);
-                    if (!weaponOwned[2]) { weaponOwned[2] = true; if (curWeapon < 2) curWeapon = 2; }
-                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[2] + " AMMO", 30);
-                } else if (modelId == 22) {
-                    weaponOwned[3] = true; ammo[3] = Math.min(200, ammo[3] + 15);
-                    if (curWeapon < 3) curWeapon = 3;
-                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[3], 30);
-                } else if (modelId == 23) {
-                    weaponOwned[4] = true; ammo[4] = Math.min(200, ammo[4] + 15);
-                    if (curWeapon < 4) curWeapon = 4;
-                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[4], 30);
-                } else if (modelId == 24) {
-                    // Crossbow ammo (disk 53)
-                    ammo[3] = Math.min(200, ammo[3] + 8);
-                    if (!weaponOwned[3]) { weaponOwned[3] = true; if (curWeapon < 3) curWeapon = 3; }
-                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[3] + " AMMO", 30);
-                } else if (modelId == 25) {
-                    // Saw ammo (disc 205)
-                    ammo[4] = Math.min(200, ammo[4] + 8);
-                    if (!weaponOwned[4]) { weaponOwned[4] = true; if (curWeapon < 4) curWeapon = 4; }
-                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[4] + " AMMO", 30);
-                } else if (modelId == 26) {
-                    weaponOwned[5] = true; ammo[5] = Math.min(200, ammo[5] + 8);
-                    if (curWeapon < 5) curWeapon = 5;
-                    setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[5], 30);
-                } else if (modelId >= 27 && modelId <= 29) {
-                    // Keys 27 red, 28 green, 29 blue - not used in ITEMS but for doors (handled via proc), give ammo + message
-                    ammo[0] = Math.min(200, ammo[0] + 5);
-                    setMessage("GOT KEY " + (modelId - 26), 30);
-                } else {
-                    // Fallback for unknown via old %8 logic
-                    int t = itemType[i] % 8;
-                    if (t >= 2) {
-                        int w = t - 2;
-                        if (w >= 0 && w < 6) {
-                            weaponOwned[w] = true;
-                            ammo[w] = Math.min(200, ammo[w] + 15);
-                            if (curWeapon < w) curWeapon = w;
-                            setMessage(TextTable.get("HUD_GOT_PREFIX", "GOT ") + WEAPON_NAMES[w], 30);
-                        }
-                    }
+                // The effect, the name and the 3D model all come from the same model id,
+                // so a model can never grant something else than what it looks like.
+                if (applyItemPickup(itemModelId[i])) {
+                    itemActive[i] = false;
+                    SoundManager.playSfx(SoundManager.SFX_PICKUP);
                 }
-                SoundManager.playSfx(SoundManager.SFX_PICKUP);
             }
         }
+    }
+
+    /**
+     * Applies one pickup model (models.bin 17..29) to the player and shows its name.
+     * Returns true when the item was consumed; a full-health medkit, a full ammo pack
+     * or a weapon already at its ammo cap stays on the floor.
+     *
+     * Values follow the original CHASM.INF [3D_OBJECTS] a_codes / [WEAPONS] table:
+     *  - life +20 up to 100, biglife +100 up to 200,
+     *  - armor3 +200, helmet1 +100 (both capped at 200),
+     *  - weapon pickups grant the weapon and its "Start" ammo,
+     *  - BAG.3O is the ammo backpack: it tops up every owned weapon.
+     */
+    public boolean applyItemPickup(int modelId) {
+        switch (modelId) {
+            case ITEM_MEDKIT:
+                if (health >= NOMINAL_HEALTH) return false;
+                health = Math.min(NOMINAL_HEALTH, health + 20);
+                break;
+            case ITEM_MEGA_HEALTH:
+                if (health >= MAX_HEALTH) return false;
+                health = Math.min(MAX_HEALTH, health + 100);
+                break;
+            case ITEM_BODY_ARMOR:
+                if (armor >= MAX_ARMOR) return false;
+                armor = Math.min(MAX_ARMOR, armor + 200);
+                break;
+            case ITEM_HELMET:
+                if (armor >= MAX_ARMOR) return false;
+                armor = Math.min(MAX_ARMOR, armor + 100);
+                break;
+            case ITEM_AMMO_PACK:
+                if (!pickupAmmoPack()) return false;
+                break;
+            case ITEM_W_SHOTGUN:
+                // CHASM.INF ACode 2 -> weapon slot 2 (Super Shotgun), Start 10.
+                if (!pickupWeapon(1, 10)) return false;
+                break;
+            case ITEM_W_VOLCANO:
+                // ACode 3 -> Volcano, Start 50.
+                if (!pickupWeapon(2, 50)) return false;
+                break;
+            case ITEM_W_BLADEGUN:
+                // ACode 4 -> BladeGun, Start 20.
+                if (!pickupWeapon(3, 20)) return false;
+                break;
+            case ITEM_W_CROSSBOW:
+                // ACode 5 -> Laser Crossbow, Start 20.
+                if (!pickupWeapon(4, 20)) return false;
+                break;
+            case ITEM_W_GRENADER:
+                // ACode 6 -> Grenader, Start 5.
+                if (!pickupWeapon(5, 5)) return false;
+                break;
+            case ITEM_KEY_RED:
+                if (hasRedKey) return false;
+                hasRedKey = true;
+                break;
+            case ITEM_KEY_GREEN:
+                if (hasGreenKey) return false;
+                hasGreenKey = true;
+                break;
+            case ITEM_KEY_BLUE:
+                if (hasBlueKey) return false;
+                hasBlueKey = true;
+                break;
+            default:
+                // 30.. are props/effects, not pickups; leave the entity alone.
+                return false;
+        }
+        showItemMessage(modelId);
+        return true;
+    }
+
+    /** Grants weapon slot {@code slot} with {@code ammoBonus} rounds and selects it. */
+    private boolean pickupWeapon(int slot, int ammoBonus) {
+        int limit = WEAPON_AMMO_LIMIT[slot];
+        if (weaponOwned[slot] && ammo[slot] >= limit) return false;
+        weaponOwned[slot] = true;
+        ammo[slot] = Math.min(limit, ammo[slot] + ammoBonus);
+        // Chasm switches to a weapon as soon as it is picked up.
+        curWeapon = slot;
+        return true;
+    }
+
+    /**
+     * BAG.3O (the backpack model) refills every weapon the player owns, using the
+     * per-shot ammo values from CHASM.INF ([WEAPONS] DAm).
+     */
+    private boolean pickupAmmoPack() {
+        boolean gained = false;
+        for (int w = 1; w < 6; w++) {
+            if (!weaponOwned[w]) continue;
+            int limit = WEAPON_AMMO_LIMIT[w];
+            if (ammo[w] >= limit) continue;
+            ammo[w] = Math.min(limit, ammo[w] + WEAPON_AMMO_PACK[w]);
+            gained = true;
+        }
+        return gained;
+    }
+
+    private void showItemMessage(int modelId) {
+        String name = (modelId >= 0 && modelId < ITEM_NAMES.length) ? ITEM_NAMES[modelId] : null;
+        if (name == null) name = "ITEM";
+        String prefix = TextTable.get("HUD_GOT_PREFIX", "GOT").trim();
+        setMessage(prefix.length() > 0 ? prefix + " " + name : name, 30);
     }
 
     public void switchWeapon(int delta) {
@@ -1008,33 +1134,35 @@ public final class GameWorld {
     public boolean fireWeapon() {
         if (gameOver || weaponCooldown > 0) return false;
         int cost = WEAPON_AMMO_COST[curWeapon];
-        if (ammo[curWeapon] < cost) {
-            // Auto-fallback to Rift Rifle with emergency cell recharge
-            if (curWeapon != 0) {
-                curWeapon = 0;
-            }
-            if (ammo[0] < 1) ammo[0] = 15;
-            cost = 1;
+        if (cost > 0 && ammo[curWeapon] < cost) {
+            // Out of ammo: fall back to the rifle, which never runs dry (slot 0, cost 0).
+            if (!weaponOwned[0]) return false;
+            curWeapon = 0;
+            cost = 0;
+            setMessage(TextTable.get("HUD_OUT_OF_AMMO", "OUT OF AMMO"), 25);
         }
-        ammo[curWeapon] -= cost;
+        if (cost > 0) ammo[curWeapon] -= cost;
         weaponCooldown = WEAPON_COOLDOWN[curWeapon];
         weaponAnimTick = weaponCooldown;
         muzzleFlashTimer = 2;
 
+        // Sound belongs to the weapon in the slot, in the original arsenal order:
+        // 1 Rifle, 2 Super Shotgun, 3 Volcano, 4 BladeGun, 5 Laser Crossbow, 6 Grenader.
         int sfx = (curWeapon == 1) ? SoundManager.SFX_SHOTGUN
                 : (curWeapon == 2) ? SoundManager.SFX_CHAINGUN
-                : (curWeapon == 3) ? SoundManager.SFX_CROSSBOW
-                : (curWeapon == 4) ? SoundManager.SFX_SAW
+                : (curWeapon == 3) ? SoundManager.SFX_SAW
+                : (curWeapon == 4) ? SoundManager.SFX_CROSSBOW
                 : (curWeapon == 5) ? SoundManager.SFX_ROCKET
                 : SoundManager.SFX_RIFLE;
         SoundManager.playSfx(sfx);
 
         if (curWeapon >= 3) {
-            // Projectile weapons (Crossbow / Megazapper bolt, Sawblade disc). Damage is applied
-            // only when the projectile reaches a monster, so there is no double hit.
+            // Projectile weapons: BladeGun throws a saw disc, the Laser Crossbow a bolt,
+            // the Grenader a grenade (bolt model, explodes on impact). Damage is applied
+            // only when the projectile reaches a target, so there is no double hit.
             spawnProjectile(
                 true,
-                (curWeapon == 4) ? PROJ_DISK : PROJ_BOLT,
+                (curWeapon == 3) ? PROJ_DISK : PROJ_BOLT,
                 playerBody.x,
                 playerBody.y - (8 << 16),
                 playerBody.z,
@@ -1044,7 +1172,7 @@ public final class GameWorld {
             return true;
         }
 
-        // Hitscan weapons (Rift Rifle, Double Shotgun, Volcano Chaingun)
+        // Hitscan weapons (Rifle, Super Shotgun, Volcano)
         performHitscanAttack(WEAPON_DAMAGE[curWeapon]);
         return true;
     }
@@ -1132,7 +1260,7 @@ public final class GameWorld {
 
         if (hp <= 0) {
             monHP[m] = 0;
-            // Sever Head on overkill or Sawblade/Shotgun/Megazapper finisher
+            // Sever Head on overkill or BladeGun/Super Shotgun/Grenader finisher
             if ((monPartMask[m] & Model3D.MASK_HEAD) != 0
                     && (damage >= 35 || curWeapon == 1 || curWeapon == 4 || curWeapon == 5)) {
                 dismemberMonsterPart(m, Model3D.SUBMODEL_HEAD);
@@ -1409,12 +1537,12 @@ public final class GameWorld {
                 continue;
             }
 
-            boolean isMegazapper = projFromPlayer[i] && projDamage[i] == 85;
+            boolean isGrenade = projFromPlayer[i] && projDamage[i] == GRENADE_DAMAGE;
             if (!hasLineOfSight(projX[i], projZ[i], nx, nz)) {
-                if (isMegazapper) {
+                if (isGrenade) {
                     int cx = projX[i], cz = projZ[i];
                     projActive[i] = false;
-                    triggerMegazapperBlast(cx, cz);
+                    triggerGrenadeBlast(cx, cz);
                 } else {
                     projActive[i] = false;
                 }
@@ -1429,7 +1557,7 @@ public final class GameWorld {
             projSector[i] = getSectorAtPoint(nx, nz);
 
             if (projFromPlayer[i]) {
-                if (isMegazapper) {
+                if (isGrenade) {
                     boolean hit = false;
                     for (int m = 0; m < monCount; m++) {
                         if (monState[m] == MSTATE_INACTIVE || monState[m] == MSTATE_DEAD) continue;
@@ -1439,7 +1567,7 @@ public final class GameWorld {
                     if (hit) {
                         int cx = nx, cz = nz;
                         projActive[i] = false;
-                        triggerMegazapperBlast(cx, cz);
+                        triggerGrenadeBlast(cx, cz);
                         continue;
                     }
                 } else {

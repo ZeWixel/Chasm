@@ -1,3 +1,172 @@
+# Chasm J2ME — прогресс ветки `arena/ad38965a-chasm` (2026-11-11)
+
+> **Ветка:** `arena/ad38965a-chasm` (от `ab6d63f`). Сборка `./build.sh` → `releases/ChasmTheRift.jar`.
+> Ресурсы пересобраны из `CSM.BIN` (`python3 tools/build_assets.py`), т.к. в `CSM.BIN` есть
+> `CHASM.INF` с настоящими `[3D_OBJECTS]`/`[WEAPONS]`.
+
+## W595: early wall frustum rejection
+
+- Photos of `b74c81a` at X=-1776/Z=-1200: TX FULL (6°) 5 FPS,
+  R/G/E/Q~/S/D=149/71/56/2/6/7 ms and leaves/walls/models 85/386/29;
+  FL FAST (12°) 10 FPS, 63/29/30/1/9/6 and 85/386/31; FL FAST SF (18°)
+  10 FPS, 62/27/32/1/9/6 and 85/386/33. Angles and model counts differ from
+  the preceding snapshots, so individual changes cannot be credited reliably.
+- Reject segments wholly outside a side plane before texture-length calculation
+  only when both endpoints are on or in front of the near plane; crossings use
+  the original clipping path. No deliberate visual change. Device impact is unknown.
+- The direct reference test checks 104,978 boundary/random cases in both viewport
+  sizes, including near-plane and side-plane edges and integer extremes (excluding
+  overflowed MIN_VALUE deltas unsupported by the original fastHypot); 11,858 are
+  early-reject candidates. 1,448 sampled world frames also match the old path.
+
+## W595: geometry and flat-model follow-up
+
+- On `ea45aff`, user measured X=-1776/Z=-1200: TX FULL (12°) 5 FPS,
+  R/G/E/Q~/S/D=149/68/59/1/6/6 ms and leaves/walls/models 85/386/32;
+  FL FAST (18°) 9 FPS, 67/30/32/1/9/7 and 85/386/34; FL FAST SF (25°)
+  9 FPS, 69/27/37/3/9/6 and 85/386/36. Q~ is an estimate; views differ.
+  Scaling is much lower than the preceding snapshots (22–24 ms), with estimated
+  lookup around 1–3 ms. World vertex transform rounded to 0–1 ms.
+- Empty portal columns no longer compute perspective wall-texture coordinates
+  or wall light unless an upper/lower wall is drawn; all span/clip updates remain.
+- FLAT model triangles advance their edge positions incrementally using the same
+  fixed-point slopes and reset at the middle vertex. No deliberate visual change.
+- Reference images match across 1,448 world/portal comparisons and 12,000 synthetic
+  flat triangle cases. The later phone snapshots above do not isolate its impact.
+
+## W595: measured scaling and entity lookup optimisation
+
+- Latest device images at X=-1776/Z=-1200: TX, angle 6°, 5 FPS,
+  R/G/E/Q~/S/D 149/68/59/6/24/6 ms, 85/386/29 leaves/walls/models; FL,
+  angle 12°, 8 FPS, 68/30/34/3/22/7, 85/386/31; FL with flat floors,
+  angle 18°, 8 FPS, 67/28/35/8/22/7, 85/386/33. V rounded to 0 ms in all.
+  The old overlay does not show the selected resolution.
+- Scaling reuses repeated rows and has 1× and 2× horizontal paths; 32,404 size
+  combinations are pixel-identical to the original nearest-neighbour formula.
+- Entity slots are grouped per leaf every frame, preserving category/index order;
+  tests compare the reference renderer, movement/activation, depth ties and the
+  96-entity cap. Q~ includes bucket setup plus sampled/extrapolated lookups.
+- World vertex transforms remain unchanged: measured V rounded to zero. This build
+  has not been tested on W595, so actual FPS and visual correctness remain unverified.
+  DEV overlay now displays FAST/FULL and SF, allowing unambiguous comparisons.
+
+## W595 measurements: detailed profiling
+
+- User photos at X=-1776 Z=-1200: TX 4 FPS, L/R/B/F 0/158/29/3 ms,
+  leaves/walls/models 85/386/23; FL 8 FPS, 0/68/29/3, 85/386/26; FL with
+  flat surfaces 8 FPS, 0/66/29/4, 85/386/26. Angles 353°, 0°, 6° respectively.
+  Old overlay does not indicate resolution, so the impact of shading and resolution
+  cannot be distinguished. A zero logic time does not prove zero cost.
+- Extended DEV overlay with V (world vertex transform), G (BSP/walls/flats),
+  E (entity pass), Q~ (estimated scan subset of E), and S/D (scaling/drawRGB).
+  Q~ samples a rotating quarter of leaves and extrapolates; timestamps have overhead
+  and coarse clocks introduce noise. New profiler build has not been tested on W595.
+- No vertex-transform or entity-lookup optimisation yet: the old measurements do not
+  isolate their costs. RenderProfileTest checks that profiling preserves pixels.
+
+## W595: PVS, profiler and fast profile
+
+- PVS: conservative solid-boundary separation with a two-cell model margin in
+  `tools/pvs.py`; rebuilt C3B. Rejected pairs L1 1220/19044, L2 388/6889,
+  L3 2198/29584. It is a small conservative improvement, not portal-beam PVS.
+- DEV MODE displays per-frame average logic, 3D, scale/drawRGB, flush timings and
+  processed leaf/wall/model counts. The clock is coarse and timings omit HUD/sleep.
+- FAST PROFILE: 120×144 internal rendering and FLAT shading; optional FLAT FLOORS;
+  settings persisted, old saves supported. See README for on-device comparison.
+- PVS compared on/off at 24,192 point/angle/shading combinations; resolution toggles,
+  shading modes, flat surfaces and existing pickup tests pass headlessly. Not run on
+  W595 yet; vertex transformation/entity lookup optimizations await device measurements.
+
+## Исправлено: предметы, оружие, ключи (главная задача)
+
+**Корень бага.** `models.bin` пакует пикапы в порядке оригинальных `.3O` (17 `LIFE.3O`,
+18 `BIGLIFE.3O`, 19 `ARMOR3.3O`, 20 `HELMET1.3O`, 21 `BAG.3O`, 22 `W_RIFLE.3O`,
+23 `W_VCANO.3O`, 24 `WDISK.3O`, 25 `WCROSS.3O`, 26 `W_GR.3O`, 27–29 карты), а
+`GameWorld.checkItemPickups()` трактовал те же id как выдуманный список (17 медкит,
+18 броня, 19 rifle, 20 shotgun, 21 chaingun ammo, 22 crossbow, 23 saw, 24 crossbow ammo,
+25 saw ammo, 26 megazapper). Отсюда «подхожу к броне — получаю Rift Rifle» и т.п.
+Имена оружия тоже были с номерами слотов (`"1:RIFT RIFLE"`), из-за чего сообщение
+склеивалось в `GOT1:RIFT RIFLE`.
+
+**Что сделано:**
+- `GameWorld.applyItemPickup(modelId)` — единая таблица «модель → эффект → имя».
+  Эффекты взяты из `CHASM.INF [3D_OBJECTS]` (`ACode`): life +20/100, biglife +100/200,
+  armor3 +200, helmet1 +100, оружейные пикапы 2..6 = слоты 2..6, ключи 141/142/143.
+  Медкит при полном HP, полный боезапас, пустой ammo pack и уже взятый ключ не
+  подбираются (остаются лежать).
+- `ITEM_NAMES[17..29]` + override `ITEM_*` через `TextTable`; сообщение теперь
+  `HUD_GOT_PREFIX + " " + имя` (по умолчанию `GOT MEDKIT`, без `GOT1:`).
+- Оружие переименовано в оригинальный арсенал: RIFLE, SUPER SHOTGUN, VOLCANO,
+  BLADEGUN, LASER CROSSBOW, GRENADER (порядок `CHASM.INF [WEAPONS]`).
+  Слоты 3/4 больше не перепутаны: 3 = BladeGun (`DISK.3O`, `PROJ_DISK`, `SFX_SAW`),
+  4 = Laser Crossbow (`CROSS.3O`, `PROJ_BOLT`, `SFX_CROSSBOW`).
+- Винтовка без боезапаса (как в оригинале), HUD показывает `INF`; при пустом
+  боезапасе текущего оружия `fireWeapon()` переключает на винтовку и **не**
+  выдумывает патроны (`ammo[0] = 15` удалено).
+- Стартовый инвентарь как в Chasm: только винтовка, броня 0. Лимиты патронов из
+  `[WEAPONS] Limit` (`WEAPON_AMMO_LIMIT`), ammo pack добавляет `DAm` каждому
+  имеющемуся оружию.
+- Ключи: `hasRedKey/hasGreenKey/hasBlueKey`, чипы R/G/B в правом верхнем углу 3D-вида.
+- HUD: высота нижней панели считается по шрифту (`16 + font.getHeight() + 2`),
+  вторая строка (имя оружия/враги) больше не обрезается снизу.
+
+**Данные (`tools/build_assets.py`)**
+- `CHASM_TO_LOCAL_ITEM` переписан по настоящей таблице: id 1→22, 2→23, 3→24, 4→25,
+  5→26, 8..13 и 15→21 (ящики патронов; 14 `omine1` — мины, оружие не портировано), 23→19 (броня), 24→20 (шлем), 26→17 (life),
+  27→18 (biglife). Неизвестные id (артефакты chojin/shield/invis, мины, dummy) больше
+  не превращаются в аптечки — пропускаются (для них нет моделей в порте).
+- Ключи в оригинале — статические `.3O` с `ACode` 141/142/143 из `#newobjects`
+  (`RESOURCE.XX`), а не item-id. Парсер `#newobjects` (поля `GoRad Shad BObj BMPz AC
+  Blw BLmt SFX BSfx File Ani`) добавлен, ключи кладутся в `valid_items` **первыми**,
+  поэтому лимит предметов их не режет. Проверено: L1 `G_CARD` (28) в (390,2172),
+  L2 `KEY` (27) в (-96,1026), L3 `KEY` (27) в (-1224,192), все в достижимых клетках.
+- Синтетические «essential_items» добавляются только если такого предмета в карте нет
+  (раньше L2 получал по 2–3 копии одного оружия).
+- Замечание: старый парсер искал секцию `;Models`, которой в retail `RESOURCE.XX` нет
+  (там `#newobjects`), поэтому `raw_props`/ступени/потолки никогда не срабатывали.
+  Мёртвый парсер удалён, `mfname` берётся из `#newobjects`, так что теперь работают и
+  реальные пропсы (бочки/статуи/обелиски), и эвристики ступеней (`cell_floor_step`) и
+  низких потолков (`cell_ceil_low`).
+
+**Проверка** (`./tests/run_tests.sh`, JDK8 и заглушки J2ME из `build.sh`, без устройства):
+`PickupTest` — 85 проверок модели/эффекта/имени/сообщения/лимитов/переключения/винтовки;
+`LevelItemTest` грузит все 3 уровня (32/48/40 предметов), проверяет, что у каждого id
+есть имя, он активен, и что в уровне есть все 5 оружий, броня, шлем, mega health,
+медкит, патроны и ключ;
+`KeyPosTest` — в каждом уровне ровно один ключ в настоящем секторе (L1 green 28,
+L2/L3 red 27). Всё зелёное.
+
+---
+
+## Второй заход (та же ветка): полнее уровни, приоритет предметов
+
+- **Лимит клеток 256 → 1024** (`compile_chasm_map_to_c3b(..., max_cells=1024)`).
+  Уровни компилировались из четверти карты: 23/51/35 секторов и 97/210/150 стен.
+  Теперь 138/83/172 секторов, 507/338/721 стен, `bsp_err=0`, c3b 28/17/39 КБ,
+  JAR 1 086 433 Б. Монстры 21/24/24 (кап 24), предметы 32/48/40.
+  Устройство/эмулятор не проверялись: если на телефоне не хватит памяти или FPS,
+  вернуть `max_cells=256` (одна константа на уровень) — данные пересоберутся.
+- **Приоритет предметов**: сначала ключи, затем по одному реальному экземпляру каждого
+  обязательного типа (5 оружий, броня, шлем, mega health, медкит, патроны), только
+  потом остальные реальные предметы карты и, если типа в карте нет вообще, синтетический
+  в центре сектора. Так кап 48 больше не может выкинуть оружие: раньше при полном наборе
+  карты L1/L2/L3 оставались без части арсенала.
+- **Реальные пропсы/ступени**: `mfname` теперь из `#newobjects`, поэтому `raw_props`
+  (бочки, статуи, обелиски/пальмы) попадают в уровень со своих координат (до 16 на
+  уровень), а не только 8 синтетических; ступени/низкие потолки снова применяются.
+- `README.md` обновлён (сектора/стены/предметы, лимит 48, таблица уровней).
+- **Найдено, не исправлено (геометрия).** Открытость клетки определяется только
+  `floors < 62`, а wall-объекты идут лишь в текстуры рёбер секторов. Клетки, где есть
+  wall-объект и при этом floor-текстура (MAP.01 323, MAP.05 156, MAP.06 556), попадают
+  в `visited` и компилируются как пол — часть внутренних стен оригинала отсутствует,
+  комнаты сливаются. **Тупик:** исключение таких клеток из `visited` (с запасным
+  спавном) сжимает уровни до 11/4/5 секторов — wall-объект это отрезок внутри открытой
+  клетки, а не твёрдая клетка. Правильный путь — строить геометрию по концам отрезков
+  стен (`c00..c11` в записи стены) и проверять коллизии на уровне под-клеток, а не
+  маской клеток.
+
+---
+
 # Chasm J2ME — прогресс ветки `arena/3c5b53b8-chasm` (2026-10-28)
 
 > **Ветка:** `arena/3c5b53b8-chasm` · **статус:** `pr_open` · **HEAD:** `f94b01d` (поверх `1f1f292 Merge PR #2`) · **JAR:** `releases/ChasmTheRift.jar ~2.36 MB` + `ChasmTheRift.jad`

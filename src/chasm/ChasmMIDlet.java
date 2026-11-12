@@ -79,6 +79,9 @@ public class ChasmMIDlet extends MIDlet {
                 byte[] data = rs.getRecord(1);
                 if (data != null && data.length >= 4) {
                     canvas.setSelectedStartLevel(data[0]);
+                    if (data.length >= 6) canvas.setFastProfile(data[5] != 0);
+                    if (data.length >= 7) canvas.setFlatSurfaces(data[6] != 0);
+                    if (data.length >= 8) canvas.setPreviousShade(data[7]);
                     canvas.getRenderer3D().shadingMode = data[1] & 3;
                     sound.musicEnabled = (data[2] != 0);
                     sound.sfxEnabled = (data[3] != 0);
@@ -99,12 +102,15 @@ public class ChasmMIDlet extends MIDlet {
         if (canvas == null || sound == null) return;
         RecordStore rs = null;
         try {
-            byte[] data = new byte[5];
+            byte[] data = new byte[8];
             data[0] = (byte) canvas.getSelectedStartLevel();
             data[1] = (byte) canvas.getRenderer3D().shadingMode;
             data[2] = (byte) (sound.musicEnabled ? 1 : 0);
             data[3] = (byte) (sound.sfxEnabled ? 1 : 0);
             data[4] = (byte) (canvas.getWorld().enemyBehavior & 1);
+            data[5] = (byte) (canvas.isFastProfile() ? 1 : 0);
+            data[6] = (byte) (PortalRenderer.flatSurfaces ? 1 : 0);
+            data[7] = (byte) canvas.getPreviousShade();
 
             rs = RecordStore.openRecordStore(RMS_NAME, true);
             if (rs.getNumRecords() >= 1) {

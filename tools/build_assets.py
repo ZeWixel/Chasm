@@ -33,6 +33,7 @@ CSM_BIN = "/tmp/ChasmTheRift/CSM.BIN"
 
 sys.path.insert(0, "/tmp/CovertOps3D-RE/scripts")
 import c3d2_core
+from pvs import build_pvs
 from png_to_bmp4 import to_indexed_15, write_bmp4
 
 os.makedirs(RES_DIR, exist_ok=True)
@@ -708,28 +709,34 @@ def build_models_pack():
         "LION4.CAR",     # 9: Guardian Lion
         "VIKING4.CAR",   # 10: Viking Warlord
     ]
+    # Weapon-in-hand models, in the original CHASM.INF [WEAPONS] order:
+    # 1 Rifle, 2 Super Shotgun, 3 Volcano, 4 BladeGun, 5 Laser Crossbow, 6 Grenader,
+    # 7 Land Mines, 8 Mega Destroyer (the last two are not ported, so they are skipped).
     weapon_specs = [
-        ("OGUN6.3O",  "OGUN6.ANI",   "OGATCK.ANI"),   # 11: Double-Barrel Rifle
-        ("RIF_H5.3O", "RIF_H2.ANI",  "RIF_H1F.ANI"),  # 12: Super Shotgun
-        ("V8H.3O",    "VSTAT7H.ANI", "VFIRE7H.ANI"),  # 13: Volcano Chaingun
-        ("DISK.3O",   "DSTAT.ANI",   "DATTACK.ANI"),  # 14: Saw-Blade Launcher
-        ("CROSS.3O",  "CROSS.ANI",   "CROSSA.ANI"),   # 15: Energy Crossbow
-        ("GR4.3O",    "GR_STAT.ANI", "GR_FIRE.ANI"),  # 16: Grenade Launcher
+        ("OGUN6.3O",  "OGUN6.ANI",   "OGATCK.ANI"),   # 11: slot 0 - Rifle
+        ("RIF_H5.3O", "RIF_H2.ANI",  "RIF_H1F.ANI"),  # 12: slot 1 - Super Shotgun
+        ("V8H.3O",    "VSTAT7H.ANI", "VFIRE7H.ANI"),  # 13: slot 2 - Volcano
+        ("DISK.3O",   "DSTAT.ANI",   "DATTACK.ANI"),  # 14: slot 3 - BladeGun (disc)
+        ("CROSS.3O",  "CROSS.ANI",   "CROSSA.ANI"),   # 15: slot 4 - Laser Crossbow
+        ("GR4.3O",    "GR_STAT.ANI", "GR_FIRE.ANI"),  # 16: slot 5 - Grenader
     ]
+    # World pickups. The ids must stay in this order: GameWorld references them by id
+    # (ITEM_MEDKIT = 17 ... ITEM_KEY_BLUE = 29). Each entry also carries the original
+    # CHASM.INF [3D_OBJECTS] a_code that decides what the item does.
     prop_specs = [
-        ("LIFE.3O",     1.3),  # 17: Medkit
-        ("BIGLIFE.3O",  1.3),  # 18: MegaHealth
-        ("ARMOR3.3O",   1.3),  # 19: Body Armor
-        ("HELMET1.3O",  1.4),  # 20: Helmet
-        ("BAG.3O",      1.3),  # 21: Ammo Pack
-        ("W_RIFLE.3O",  1.3),  # 22: Super Shotgun Pickup
-        ("W_VCANO.3O",  1.3),  # 23: Volcano Pickup
-        ("WDISK.3O",    1.3),  # 24: Blade Pickup
-        ("WCROSS.3O",   1.3),  # 25: Crossbow Pickup
-        ("W_GR.3O",     1.3),  # 26: Grenade Pickup
-        ("R_CARD.3O",   1.5),  # 27: Red Key
-        ("G_CARD.3O",   1.5),  # 28: Green Key
-        ("B_CARD.3O",   1.5),  # 29: Blue Key
+        ("LIFE.3O",     1.3),  # 17: Medkit            (a_code 102, +20 HP)
+        ("BIGLIFE.3O",  1.3),  # 18: Mega health       (a_code 120, +100 HP)
+        ("ARMOR3.3O",   1.3),  # 19: Body armor suit   (a_code 128, +200 armor)
+        ("HELMET1.3O",  1.4),  # 20: Helmet            (a_code 124, +100 armor)
+        ("BAG.3O",      1.3),  # 21: Ammo backpack     (item 0, refills owned weapons)
+        ("W_RIFLE.3O",  1.3),  # 22: Super Shotgun     (a_code 2)
+        ("W_VCANO.3O",  1.3),  # 23: Volcano           (a_code 3)
+        ("WDISK.3O",    1.3),  # 24: BladeGun          (a_code 4)
+        ("WCROSS.3O",   1.3),  # 25: Laser Crossbow    (a_code 5)
+        ("W_GR.3O",     1.3),  # 26: Grenader          (a_code 6)
+        ("R_CARD.3O",   1.5),  # 27: Red key           (a_code 141)
+        ("G_CARD.3O",   1.5),  # 28: Green key         (a_code 142)
+        ("B_CARD.3O",   1.5),  # 29: Blue key          (a_code 143)
         PROP_MODEL_SPECS[30],  # 30: Explosive Barrel
         PROP_MODEL_SPECS[31],  # 31: Pharaoh Statue
         PROP_MODEL_SPECS[32],  # 32: Obelisk / Pillar
@@ -789,12 +796,58 @@ CHASM_TO_LOCAL_MON = {
     16: 9,  # Lion
 }
 
+# Map item wall id (map texture id 131..162, so item id 0..31) -> local pickup model
+# (models.bin 17..29). The ids and a_codes are the original CHASM.INF [3D_OBJECTS] table:
+#   0 bag(backpack) 1 w_rifle 2 w_vcano 3 wdisk 4 wcross 5 w_gr 6..7 dummy
+#   8 bullets 9 gbbull 10 vbox 11 pila1 12 arrows 13 gr_box 14 omine1 15..18 dummy
+#   19 hole 20 chojin 21 shield 22 invis 23 armor3 24 helmet1 25 dummy
+#   26 life 27 biglife 28..29 dummy 30 mine
+# The port has no model for the artifacts (20..22) or the land mine (14/30), so those stay
+# out of the level instead of borrowing a wrong-looking model. All ammo boxes share
+# BAG.3O: the effect is the generic "top up every owned weapon" ammo pack.
 CHASM_TO_LOCAL_ITEM = {
-    22: 17, 23: 18, 21: 19, 24: 20, 20: 21,
-    1: 22, 2: 23, 3: 24, 4: 25, 5: 26,
-    8: 21, 9: 21, 10: 21, 11: 21, 12: 21, 13: 21,
-    17: 27, 18: 28, 19: 29,
+    0: 21,    # bag.3o (backpack)       -> AMMO PACK
+    1: 22,    # w_rifle.3o              -> SUPER SHOTGUN pickup
+    2: 23,    # w_vcano.3o              -> VOLCANO pickup
+    3: 24,    # wdisk.3o                -> BLADEGUN pickup
+    4: 25,    # wcross.3o               -> LASER CROSSBOW pickup
+    5: 26,    # w_gr.3o                 -> GRENADER pickup
+    8: 21, 9: 21, 10: 21, 11: 21, 12: 21, 13: 21, 15: 21,  # ammo boxes -> AMMO PACK (omine1 is a mine, not ported)
+    23: 19,   # armor3.3o               -> BODY ARMOR
+    24: 20,   # helmet1.3o              -> HELMET
+    26: 17,   # life.3o                 -> MEDKIT
+    27: 18,   # biglife.3o              -> MEGA HEALTH
 }
+
+# Key cards are static 3D objects in the original maps (their own .3O plus an a_code),
+# not item pickups, so they are picked up from the model list instead.
+KEY_ACODE_LOCAL_ITEM = {
+    141: 27,  # RedKey   (ACode)
+    142: 28,  # GreenKey
+    143: 29,  # BlueKey
+}
+KEY_MODEL_LOCAL_ITEM = {
+    "R_CARD": 27,
+    "G_CARD": 28,
+    "B_CARD": 29,
+    "KEY": 27,    # KEY.3O / KEY_1.3O on MAP.05/MAP.06 - the red key of those maps
+    "KEY_1": 27,
+}
+
+
+def key_local_item_for(model_name):
+    """Return the local pickup id (27/28/29) for a key .3O, or None.
+
+    RESOURCE lists the key models as R_CARD.3O / G_CARD.3O / B_CARD.3O, and MAP.05/MAP.06
+    use KEY.3O / KEY_1.3O for their red key. Suffixes are ignored so KEY_01 etc. work too.
+    """
+    name = os.path.splitext(model_name.strip().upper())[0]
+    if name in KEY_MODEL_LOCAL_ITEM:
+        return KEY_MODEL_LOCAL_ITEM[name]
+    for key, item_id in sorted(KEY_MODEL_LOCAL_ITEM.items(), key=lambda kv: -len(kv[0])):
+        if name.startswith(key):
+            return item_id
+    return None
 
 
 def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
@@ -806,22 +859,34 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     wall_slot, default_wall, flat_slot, default_flat = build_level_materials(
         level_idx, map_num, mdata, rdata, floors, ceils)
 
-    # Parse static 3O model filenames from RESOURCE.XX
-    model_files = {}
     lines = [l.strip() for l in rdata.splitlines()]
-    i = 0
-    while i < len(lines) and ";Models" not in lines[i]:
-        i += 1
-    i += 1
-    m_idx = 0
-    while i < len(lines) and ";Walls" not in lines[i]:
-        line = lines[i]
-        if line and not line.startswith(";"):
+
+    # The retail RESOURCE.XX has no ";Models" section: its map-specific 3D objects are
+    # listed in "#newobjects" as [GoRad Shad BObj BMPz AC Blw BLmt SFX BSfx File Ani],
+    # and a map wall with texture id 163+n refers to entry n of that list. This is where
+    # the key cards live (ACode 141/142/143), so keys are found from this table.
+    object_models = {}
+    object_acodes = {}
+    in_newobjects = False
+    obj_idx = 0
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.lower().startswith("#newobjects"):
+            in_newobjects = True
+            continue
+        if in_newobjects:
+            if line.startswith("#") or line.startswith(";"):
+                break
             parts = line.split()
             if len(parts) >= 10:
-                model_files[m_idx] = parts[9].upper()
-            m_idx += 1
-        i += 1
+                object_models[obj_idx] = parts[9].upper()
+                try:
+                    object_acodes[obj_idx] = int(parts[4])
+                except ValueError:
+                    object_acodes[obj_idx] = 0
+                obj_idx += 1
 
     # Parse lights and monsters from MAP.XX (0x27001)
     l_cnt, = struct.unpack("<H", mdata[0x27001:0x27003])
@@ -862,6 +927,7 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     cell_floor_step = {}
     cell_ceil_low = {}
     raw_items = []
+    raw_keys = []
     raw_props = []
     walls_off = 0x18001
     for gx in range(64):
@@ -879,11 +945,22 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
                     for dy in range(-1, 2):
                         cell_wall_tex[(mx + dx, my + dy)] = slot
             elif 131 <= tid < 163:
-                raw_items.append((CHASM_TO_LOCAL_ITEM.get(tid - 131, 17), wx0, wy0))
+                # Unknown item ids (artifacts, mines, dummy slots) have no matching model
+                # in the port, so they are left out instead of being turned into medkits.
+                local_item = CHASM_TO_LOCAL_ITEM.get(tid - 131)
+                if local_item is not None:
+                    raw_items.append((local_item, wx0, wy0))
             elif 163 <= tid < 227:
-                mfname = model_files.get(tid - 163, "")
+                mfname = object_models.get(tid - 163, "")
+                obj_name = object_models.get(tid - 163, "")
+                obj_acode = object_acodes.get(tid - 163, 0)
                 cx, cy = max(0, min(63, int(wx0))), max(0, min(63, int(wy0)))
-                if any(s in mfname for s in ("STAI", "S_TAIR", "PYRST", "P_1S", "P_2S", "BOX~", "TABLE")):
+                key_item = KEY_ACODE_LOCAL_ITEM.get(obj_acode)
+                if key_item is None:
+                    key_item = key_local_item_for(obj_name) or key_local_item_for(mfname)
+                if key_item is not None:
+                    raw_keys.append((key_item, wx0, wy0))
+                elif any(s in mfname for s in ("STAI", "S_TAIR", "PYRST", "P_1S", "P_2S", "BOX~", "TABLE")):
                     cell_floor_step[(cx, cy)] = 12
                 elif any(s in mfname for s in ("BALK", "PTL", "POTOL", "AR_0", "DOMED", "SVOD")):
                     cell_ceil_low[(cx, cy)] = 84
@@ -1068,6 +1145,18 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     lvl.objects = [dict(x=px_c3d, z=pz_c3d, angle=c3d_ang, type=1, param=0)]
 
     report = c3d2_core.LEGACY.rebuild_derived(lvl, validate=True)
+    # Only immutable, solid C3B boundaries qualify as occluders. Never use
+    # portals/doors here: a PVS must remain valid when they open.
+    solid = []
+    for wall in walls:
+        if wall["back"] == -1 and wall["flags"] & 1:
+            ax, ay = vertices[wall["sv"]]
+            bx, by = vertices[wall["ev"]]
+            solid.append((ax // SCALE + 32, ay // SCALE + 32,
+                          bx // SCALE + 32, by // SCALE + 32))
+    lvl.pvs = build_pvs(rects, solid)
+    hidden_pairs = sum(sum(row) for row in lvl.pvs)
+    print(f"[PVS] Level {level_idx}: {hidden_pairs} / {len(rects)**2} pairs safely rejected")
     out_c3b = os.path.join(LEVELS_DIR, f"level{level_idx}.c3b")
     c3d2_core.dump_c3b(lvl, f"/textures/custom/L{level_idx}/materials.c3m", out_c3b, None)
 
@@ -1095,16 +1184,44 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
     valid_monsters = valid_monsters[:24]
 
     valid_items = []
-    for itype, fx, fy in raw_items:
+
+    def add_item(itype, fx, fy):
+        valid_items.append((itype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE)))
+
+    # 1. Keys first: the item cap must never drop one.
+    for itype, fx, fy in raw_keys:
+        add_item(itype, fx, fy)
+
+    # 2. Then the first real instance of every essential pickup (all five weapons,
+    #    health, armour, helmet, mega health, ammo), so a level is always playable with
+    #    the full arsenal even when its 40+ medkits/ammo boxes would fill the cap.
+    essential_items = [22, 23, 24, 25, 26, 17, 19, 21, 18, 20]
+    live_items = []
+    for idx_i, (itype, fx, fy) in enumerate(raw_items):
         if (int(fx), int(fy)) in visited:
-            valid_items.append((itype, int((fx - 32.0) * SCALE), int((fy - 32.0) * SCALE)))
-    # Ensure weapons, medkits, armor, ammo are available (no keys)
-    essential_items = [22, 23, 24, 25, 26, 17, 19, 21, 18, 20]  # no keys
+            live_items.append((idx_i, itype, fx, fy))
+    added_indexes = set()
+    present_types = set()
+    for idx_i, itype, fx, fy in live_items:
+        if itype in essential_items and itype not in present_types:
+            add_item(itype, fx, fy)
+            added_indexes.add(idx_i)
+            present_types.add(itype)
+
+    # 3. A synthetic pickup only for an essential type the map does not contain at all.
     for idx_e, itype in enumerate(essential_items):
+        if itype in present_types:
+            continue
         if idx_e < len(sector_centers):
             cx, cy = sector_centers[(idx_e * 2 + 1) % len(sector_centers)]
             valid_items.append((itype, int((cx - 32.0) * SCALE) + 16, int((cy - 32.0) * SCALE) - 16))
-    valid_items = valid_items[:28]
+            present_types.add(itype)
+
+    # 4. Everything else the map really has: duplicate weapons, medkits, ammo boxes.
+    for idx_i, itype, fx, fy in live_items:
+        if idx_i not in added_indexes:
+            add_item(itype, fx, fy)
+    valid_items = valid_items[:48]
 
     valid_props = []
     for ptype, fx, fy, pang in raw_props:
@@ -1152,9 +1269,9 @@ def compile_chasm_map_to_c3b(level_idx, map_num, max_cells):
 
 
 def build_all_levels():
-    compile_chasm_map_to_c3b(1, 1, max_cells=256)
-    compile_chasm_map_to_c3b(2, 5, max_cells=256)
-    compile_chasm_map_to_c3b(3, 6, max_cells=256)
+    compile_chasm_map_to_c3b(1, 1, max_cells=1024)
+    compile_chasm_map_to_c3b(2, 5, max_cells=1024)
+    compile_chasm_map_to_c3b(3, 6, max_cells=1024)
     # MAP.99 is the briefing background (not playable), so only three playable maps are built.
 
 

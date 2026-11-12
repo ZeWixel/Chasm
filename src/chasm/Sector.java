@@ -11,6 +11,9 @@ public final class Sector {
 
     public WallSegment[] walls;
 
+    // Per-frame render buckets, rebuilt after simulation before entity drawing.
+    int renderMonHead, renderLimbHead, renderItemHead, renderPropHead, renderProjHead;
+
     // Global clip arrays used by the renderer
     public static short[] ceilingClip;
     public static short[] floorClip;
@@ -53,6 +56,11 @@ public final class Sector {
     /**
      * Resets clip arrays to initial state before rendering a new frame.
      */
+    static void releaseClipArrays() {
+        floorClip = null; ceilingClip = null;
+        initialFloorClip = null; initialCeilingClip = null;
+    }
+
     public static void resetClipArrays() {
         int viewportWidth = PortalRenderer.VIEWPORT_WIDTH;
 
